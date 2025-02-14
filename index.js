@@ -1,4 +1,4 @@
-import express from 'express';import express from 'express';import express from 'express';
+import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
@@ -28,7 +28,7 @@ const supabase = createClient(
 // Middleware
 app.use(express.json());
 app.use(cors({
-  origin: process.env.CORS_ORIGIN,
+  origin: process.env.CORS_ORIGIN || '*',
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
