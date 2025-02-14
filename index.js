@@ -64,12 +64,14 @@ app.post('/api/create-checkout-session', async (req, res) => {
       });
     }
 
-    // Get user from Supabase
-    const { data: { user }, error: userError } = await supabase.auth.admin.getUserByEmail(
-      customer_email
-    );
+    // Get user from Supabase by email
+    const { data: userData, error: userError } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('email', customer_email)
+      .single();
 
-    if (userError || !user) {
+    if (userError || !userData) {
       return res.status(401).json({ error: 'User not found' });
     }
 
@@ -81,7 +83,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       cancel_url,
       customer_email,
       metadata: {
-        user_id: user.id
+        user_id: userData.id
       },
       shipping_address_collection: {
         allowed_countries: ['US', 'CA', 'GB'],
@@ -143,7 +145,7 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
     const userId = session.metadata.user_id;
 
     try {
-      // Get cart items
+      // Get user's cart
       const { data: cartData } = await supabase
         .from('carts')
         .select('id')
@@ -154,6 +156,7 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
         throw new Error('Cart not found');
       }
 
+      // Get cart items with product details
       const { data: cartItems, error: cartError } = await supabase
         .from('cart_items')
         .select(`
@@ -206,10 +209,12 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
       if (itemsError) throw itemsError;
 
       // Clear cart
-      await supabase
+      const { error: clearCartError } = await supabase
         .from('cart_items')
         .delete()
         .eq('cart_id', cartData.id);
+
+      if (clearCartError) throw clearCartError;
 
       console.log('Order processed successfully:', order.id);
     } catch (error) {
