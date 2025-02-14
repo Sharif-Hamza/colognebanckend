@@ -1,4 +1,4 @@
-import express from 'express';
+import express from 'express';import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
@@ -65,15 +65,18 @@ app.post('/api/create-checkout-session', async (req, res) => {
     }
 
     // Get user from Supabase by email
-    const { data: userData, error: userError } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('email', customer_email)
-      .single();
+    const { data: { users }, error: userError } = await supabase.auth.admin
+      .listUsers({
+        filters: {
+          email: 'eq.' + customer_email
+        }
+      });
 
-    if (userError || !userData) {
+    if (userError || !users || users.length === 0) {
       return res.status(401).json({ error: 'User not found' });
     }
+
+    const user = users[0];
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -83,7 +86,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       cancel_url,
       customer_email,
       metadata: {
-        user_id: userData.id
+        user_id: user.id
       },
       shipping_address_collection: {
         allowed_countries: ['US', 'CA', 'GB'],
