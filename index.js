@@ -13,10 +13,16 @@ const app = express();
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// Initialize Supabase client
+// Initialize Supabase client with service role key
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  }
 );
 
 // CORS middleware
@@ -52,14 +58,18 @@ app.post('/api/create-checkout-session', async (req, res) => {
     // Verify user exists in Supabase
     const { data: user, error: userError } = await supabase
       .from('profiles')
-      .select('id')
+      .select('id, email')
       .eq('id', user_id)
-      .eq('email', customer_email)
       .single();
 
     if (userError || !user) {
-      console.error('User verification error:', userError);
+      console.error('User verification error:', { error: userError, hint: 'Double check your Supabase `anon` or `service_role` API key.' });
       return res.status(401).json({ error: 'User not found' });
+    }
+
+    // Verify email matches
+    if (user.email !== customer_email) {
+      return res.status(401).json({ error: 'Email mismatch' });
     }
 
     // Create Stripe checkout session
