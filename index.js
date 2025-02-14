@@ -25,12 +25,16 @@ const supabase = createClient(
   }
 );
 
-// CORS middleware
+// CORS middleware with preflight support
 app.use(cors({
   origin: process.env.CORS_ORIGIN,
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
 }));
+
+// Handle preflight requests
+app.options('*', cors());
 
 // Parse JSON bodies for all routes except webhook
 app.use((req, res, next) => {
@@ -48,24 +52,28 @@ app.get('/', (req, res) => {
 
 // Verify Supabase token middleware
 async function verifyAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ error: 'No authorization header' });
-  }
-
   try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: 'No authorization header' });
+    }
+
     const token = authHeader.replace('Bearer ', '');
+    
+    // Verify the JWT token with Supabase
     const { data: { user }, error } = await supabase.auth.getUser(token);
 
     if (error || !user) {
-      throw new Error('Invalid token');
+      console.error('Token verification error:', error);
+      return res.status(401).json({ error: 'Invalid authentication token' });
     }
 
+    // Store user in request for later use
     req.user = user;
     next();
   } catch (error) {
     console.error('Auth error:', error);
-    return res.status(401).json({ error: 'Authentication failed' });
+    return res.status(401).json({ error: 'Authentication failed', details: error.message });
   }
 }
 
