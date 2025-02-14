@@ -1,4 +1,4 @@
-import express from 'express';
+
 import cors from 'cors';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
@@ -26,12 +26,20 @@ const supabase = createClient(
 );
 
 // Middleware
-app.use(express.json());
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Parse JSON for regular endpoints
+app.use((req, res, next) => {
+  if (req.path === '/api/webhook') {
+    next();
+  } else {
+    express.json()(req, res, next);
+  }
+});
 
 // Health check endpoint
 app.get('/', (req, res) => {
