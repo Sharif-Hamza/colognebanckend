@@ -1,4 +1,4 @@
-import express from 'express';
+import express from 'express';import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
@@ -43,20 +43,22 @@ app.get('/', (req, res) => {
 // Create checkout session endpoint
 app.post('/api/create-checkout-session', async (req, res) => {
   try {
-    const { line_items, success_url, cancel_url, customer_email } = req.body;
+    const { line_items, success_url, cancel_url, customer_email, user_id } = req.body;
 
-    if (!line_items || !success_url || !cancel_url || !customer_email) {
+    if (!line_items || !success_url || !cancel_url || !customer_email || !user_id) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Get user from Supabase
+    // Verify user exists in Supabase
     const { data: user, error: userError } = await supabase
       .from('profiles')
       .select('id')
+      .eq('id', user_id)
       .eq('email', customer_email)
       .single();
 
     if (userError || !user) {
+      console.error('User verification error:', userError);
       return res.status(401).json({ error: 'User not found' });
     }
 
