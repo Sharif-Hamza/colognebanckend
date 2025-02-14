@@ -1,4 +1,4 @@
-import express from 'express';import express from 'express';
+import express from 'express';import express from 'express';import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
@@ -7,21 +7,10 @@ import { createClient } from '@supabase/supabase-js';
 // Load environment variables
 dotenv.config();
 
-// Validate required environment variables
-const requiredEnvVars = [
-  'STRIPE_SECRET_KEY',
-  'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
-  'CORS_ORIGIN'
-];
-
-for (const envVar of requiredEnvVars) {
-  if (!process.env[envVar]) {
-    throw new Error(`Missing required environment variable: ${envVar}`);
-  }
-}
-
+// Initialize Express app
 const app = express();
+
+// Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Initialize Supabase client
@@ -48,8 +37,7 @@ app.use(cors({
 app.get('/', (req, res) => {
   res.json({ 
     status: 'healthy',
-    supabase: !!supabase,
-    stripe: !!stripe
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -66,18 +54,18 @@ app.post('/api/create-checkout-session', async (req, res) => {
 
     // Get user from Supabase by email
     const { data: { users }, error: userError } = await supabase.auth.admin
-      .listUsers({
-        filters: {
-          email: 'eq.' + customer_email
-        }
-      });
+      .listUsers();
 
-    if (userError || !users || users.length === 0) {
+    if (userError) {
+      throw new Error('Failed to fetch users');
+    }
+
+    const user = users.find(u => u.email === customer_email);
+    if (!user) {
       return res.status(401).json({ error: 'User not found' });
     }
 
-    const user = users[0];
-
+    // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'payment',
@@ -229,12 +217,8 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
   res.json({ received: true });
 });
 
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log('Environment:', {
-    supabaseUrl: process.env.SUPABASE_URL,
-    hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-    corsOrigin: process.env.CORS_ORIGIN
-  });
 });
