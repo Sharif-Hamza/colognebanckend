@@ -15,6 +15,20 @@ app.use(cors({
   credentials: true
 }));
 
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', message: 'Server is running' });
+});
+
+// Meta endpoint
+app.get('/meta.json', (req, res) => {
+  res.json({
+    name: 'Cologne-Ologist Backend',
+    version: '1.0.0',
+    status: 'ok'
+  });
+});
+
 // Create checkout session
 app.post('/api/create-checkout-session', async (req, res) => {
   try {
