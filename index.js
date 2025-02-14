@@ -4,7 +4,22 @@ import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 
+// Load environment variables
 dotenv.config();
+
+// Validate required environment variables
+const requiredEnvVars = [
+  'STRIPE_SECRET_KEY',
+  'SUPABASE_URL',
+  'SUPABASE_SERVICE_ROLE_KEY',
+  'CORS_ORIGIN'
+];
+
+for (const envVar of requiredEnvVars) {
+  if (!process.env[envVar]) {
+    throw new Error(`Missing required environment variable: ${envVar}`);
+  }
+}
 
 const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -12,7 +27,13 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // Initialize Supabase client
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  }
 );
 
 // Middleware
@@ -25,7 +46,11 @@ app.use(cors({
 
 // Health check endpoint
 app.get('/', (req, res) => {
-  res.json({ status: 'healthy' });
+  res.json({ 
+    status: 'healthy',
+    supabase: !!supabase,
+    stripe: !!stripe
+  });
 });
 
 // Create checkout session
@@ -199,4 +224,9 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log('Environment:', {
+    supabaseUrl: process.env.SUPABASE_URL,
+    hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    corsOrigin: process.env.CORS_ORIGIN
+  });
 });
