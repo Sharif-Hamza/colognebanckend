@@ -12,27 +12,26 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 app.use(express.json());
 app.use(cors({
   origin: process.env.CORS_ORIGIN,
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
 
 // Health check endpoint
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', message: 'Server is running' });
-});
-
-// Meta endpoint
-app.get('/meta.json', (req, res) => {
-  res.json({
-    name: 'Cologne-Ologist Backend',
-    version: '1.0.0',
-    status: 'ok'
-  });
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy' });
 });
 
 // Create checkout session
 app.post('/api/create-checkout-session', async (req, res) => {
   try {
     const { line_items, success_url, cancel_url, customer_email } = req.body;
+
+    if (!line_items || !success_url || !cancel_url || !customer_email) {
+      return res.status(400).json({ 
+        error: 'Missing required fields' 
+      });
+    }
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -73,7 +72,9 @@ app.post('/api/create-checkout-session', async (req, res) => {
     res.json({ sessionId: session.id });
   } catch (error) {
     console.error('Error creating checkout session:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      error: error.message || 'Failed to create checkout session' 
+    });
   }
 });
 
@@ -94,10 +95,14 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
   }
 
   // Handle the event
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    // Handle successful payment
-    console.log('Payment successful:', session);
+  switch (event.type) {
+    case 'checkout.session.completed':
+      const session = event.data.object;
+      // Handle successful payment
+      console.log('Payment successful:', session);
+      break;
+    default:
+      console.log(`Unhandled event type ${event.type}`);
   }
 
   res.json({ received: true });
