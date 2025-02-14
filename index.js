@@ -16,13 +16,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // Initialize Supabase client
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false
-    }
-  }
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 // CORS middleware
@@ -56,11 +50,13 @@ app.post('/api/create-checkout-session', async (req, res) => {
     }
 
     // Get user from Supabase
-    const { data: { users }, error: userError } = await supabase.auth.admin.listUsers();
-    if (userError) throw new Error('Failed to fetch users');
+    const { data: user, error: userError } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('email', customer_email)
+      .single();
 
-    const user = users.find(u => u.email === customer_email);
-    if (!user) {
+    if (userError || !user) {
       return res.status(401).json({ error: 'User not found' });
     }
 
