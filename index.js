@@ -46,8 +46,31 @@ app.get('/', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
+// Verify Supabase token middleware
+async function verifyAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: 'No authorization header' });
+  }
+
+  try {
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      throw new Error('Invalid token');
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error('Auth error:', error);
+    return res.status(401).json({ error: 'Authentication failed' });
+  }
+}
+
 // Create checkout session endpoint
-app.post('/api/create-checkout-session', async (req, res) => {
+app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
   try {
     const { line_items, success_url, cancel_url, customer_email, user_id } = req.body;
 
@@ -63,7 +86,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       .single();
 
     if (userError || !user) {
-      console.error('User verification error:', { error: userError, hint: 'Double check your Supabase `anon` or `service_role` API key.' });
+      console.error('User verification error:', userError);
       return res.status(401).json({ error: 'User not found' });
     }
 
