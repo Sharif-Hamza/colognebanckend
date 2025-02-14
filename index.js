@@ -1,5 +1,3 @@
-
-import cors from 'cors';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -27,14 +25,14 @@ const supabase = createClient(
   }
 );
 
-// Middleware
+// CORS middleware
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin: process.env.CORS_ORIGIN,
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Parse JSON for regular endpoints
+// Parse JSON bodies for all routes except webhook
 app.use((req, res, next) => {
   if (req.path === '/api/webhook') {
     next();
@@ -45,30 +43,21 @@ app.use((req, res, next) => {
 
 // Health check endpoint
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'healthy',
-    timestamp: new Date().toISOString()
-  });
+  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// Create checkout session
+// Create checkout session endpoint
 app.post('/api/create-checkout-session', async (req, res) => {
   try {
     const { line_items, success_url, cancel_url, customer_email } = req.body;
 
     if (!line_items || !success_url || !cancel_url || !customer_email) {
-      return res.status(400).json({ 
-        error: 'Missing required fields' 
-      });
+      return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Get user from Supabase by email
-    const { data: { users }, error: userError } = await supabase.auth.admin
-      .listUsers();
-
-    if (userError) {
-      throw new Error('Failed to fetch users');
-    }
+    // Get user from Supabase
+    const { data: { users }, error: userError } = await supabase.auth.admin.listUsers();
+    if (userError) throw new Error('Failed to fetch users');
 
     const user = users.find(u => u.email === customer_email);
     if (!user) {
@@ -118,13 +107,11 @@ app.post('/api/create-checkout-session', async (req, res) => {
     res.json({ sessionId: session.id });
   } catch (error) {
     console.error('Error creating checkout session:', error);
-    res.status(500).json({ 
-      error: error.message || 'Failed to create checkout session' 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Webhook endpoint for Stripe events
+// Webhook endpoint
 app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
@@ -140,13 +127,12 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // Handle the event
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     const userId = session.metadata.user_id;
 
     try {
-      // Get user's cart
+      // Get cart
       const { data: cartData } = await supabase
         .from('carts')
         .select('id')
@@ -157,7 +143,7 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
         throw new Error('Cart not found');
       }
 
-      // Get cart items with product details
+      // Get cart items
       const { data: cartItems, error: cartError } = await supabase
         .from('cart_items')
         .select(`
@@ -173,18 +159,13 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
 
       if (cartError) throw cartError;
 
-      // Calculate total from cart items
-      const total = cartItems.reduce((sum, item) => {
-        return sum + (item.products.price * item.quantity);
-      }, 0);
-
       // Create order
       const { data: order, error: orderError } = await supabase
         .from('orders')
         .insert({
           user_id: userId,
           status: 'completed',
-          total: total,
+          total: session.amount_total / 100,
           stripe_session_id: session.id,
           shipping_address: session.shipping_details,
           payment_status: session.payment_status,
@@ -210,14 +191,11 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
       if (itemsError) throw itemsError;
 
       // Clear cart
-      const { error: clearCartError } = await supabase
+      await supabase
         .from('cart_items')
         .delete()
         .eq('cart_id', cartData.id);
 
-      if (clearCartError) throw clearCartError;
-
-      console.log('Order processed successfully:', order.id);
     } catch (error) {
       console.error('Error processing order:', error);
       return res.status(500).json({ error: 'Failed to process order' });
