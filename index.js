@@ -1,4 +1,4 @@
-// ES Module imports
+// ES Module imports// ES Module imports
 import { default as express } from 'express';
 import { default as cors } from 'cors';
 import { config } from 'dotenv';
@@ -133,11 +133,38 @@ async function verifyAuth(req, res, next) {
     console.log('Attempting to verify token...');
     
     try {
+      // Create a new client for this request
+      const authClient = createClient(
+        supabaseUrl,
+        supabaseKey,
+        {
+          auth: {
+            autoRefreshToken: false,
+            persistSession: false,
+            detectSessionInUrl: false
+          }
+        }
+      );
+
       // First verify the token with Supabase
-      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+      const { data: { user }, error: authError } = await authClient.auth.getUser(token);
       
       if (authError) {
         console.error('Token verification error:', authError);
+        // Try to decode the token to get more information
+        try {
+          const tokenParts = token.split('.');
+          if (tokenParts.length === 3) {
+            const payload = JSON.parse(atob(tokenParts[1]));
+            console.error('Token payload:', {
+              exp: new Date(payload.exp * 1000).toISOString(),
+              role: payload.role,
+              aud: payload.aud
+            });
+          }
+        } catch (e) {
+          console.error('Error parsing token:', e);
+        }
         return res.status(401).json({ 
           error: 'Invalid authentication token',
           details: authError.message
