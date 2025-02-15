@@ -23,9 +23,23 @@ console.log('Environment Check:', {
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Initialize Supabase client with service role key
+console.log('Initializing Supabase with:', {
+  url_length: process.env.SUPABASE_URL?.length || 0,
+  service_key_length: process.env.SUPABASE_SERVICE_ROLE_KEY?.length || 0,
+  anon_key_length: process.env.SUPABASE_ANON_KEY?.length || 0
+});
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error('Missing required Supabase configuration');
+  process.exit(1);
+}
+
 const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY, // Fallback to anon key if service role key is not available
+  supabaseUrl,
+  supabaseKey,
   {
     auth: {
       autoRefreshToken: false,
@@ -39,11 +53,10 @@ const supabase = createClient(
 supabase.auth.getSession().then(({ data, error }) => {
   if (error) {
     console.error('Supabase connection test failed:', error);
-    console.error('Current environment:', {
-      SUPABASE_URL_LENGTH: process.env.SUPABASE_URL?.length || 0,
-      SUPABASE_SERVICE_ROLE_KEY_LENGTH: process.env.SUPABASE_SERVICE_ROLE_KEY?.length || 0,
-      SUPABASE_ANON_KEY_LENGTH: process.env.SUPABASE_ANON_KEY?.length || 0,
-      NODE_ENV: process.env.NODE_ENV
+    console.error('Current configuration:', {
+      url_prefix: supabaseUrl.substring(0, 10) + '...',
+      key_prefix: supabaseKey.substring(0, 10) + '...',
+      key_length: supabaseKey.length
     });
   } else {
     console.log('Supabase connection test successful');
@@ -93,43 +106,44 @@ async function verifyAuth(req, res, next) {
     const token = authHeader.replace('Bearer ', '');
     console.log('Attempting to verify token...');
     
-    // First try to get user with Supabase auth
+    // First try to decode the JWT to get the user ID
+    try {
+      const decoded = JSON.parse(atob(token.split('.')[1]));
+      console.log('JWT decode successful:', { sub: decoded.sub });
+      
+      if (decoded.sub) {
+        // Get user profile directly using RLS bypass
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', decoded.sub)
+          .single();
+
+        if (profileError) {
+          console.error('Profile fetch error:', profileError);
+          // Log the actual error details
+          console.error('Full error:', JSON.stringify(profileError, null, 2));
+          return res.status(401).json({ error: 'Failed to fetch user profile' });
+        }
+
+        if (!profile) {
+          console.error('No profile found for user:', decoded.sub);
+          return res.status(401).json({ error: 'User profile not found' });
+        }
+
+        console.log('Profile found via JWT:', { id: profile.id });
+        req.user = { id: decoded.sub, email: profile.email, profile };
+        return next();
+      }
+    } catch (e) {
+      console.error('JWT decode error:', e);
+    }
+
+    // If JWT decode fails, try Supabase auth
     const { data: { user }, error } = await supabase.auth.getUser(token);
 
     if (error) {
       console.error('Token verification error:', error);
-      console.log('Attempting JWT fallback...');
-      
-      // Fallback: Try to decode the JWT
-      try {
-        const decoded = JSON.parse(atob(token.split('.')[1]));
-        console.log('JWT decode successful:', { sub: decoded.sub });
-        
-        if (decoded.sub) {
-          // Get user profile directly
-          const { data: profile, error: profileError } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', decoded.sub)
-            .single();
-
-          if (profileError) {
-            console.error('Profile fetch error:', profileError);
-            return res.status(401).json({ error: 'User profile not found' });
-          }
-
-          if (!profile) {
-            console.error('No profile found for user:', decoded.sub);
-            return res.status(401).json({ error: 'User profile not found' });
-          }
-
-          console.log('Profile found via JWT fallback');
-          req.user = { id: decoded.sub, email: profile.email };
-          return next();
-        }
-      } catch (e) {
-        console.error('JWT decode error:', e);
-      }
       return res.status(401).json({ error: 'Invalid authentication token' });
     }
 
@@ -149,7 +163,7 @@ async function verifyAuth(req, res, next) {
 
     if (profileError) {
       console.error('Profile fetch error:', profileError);
-      return res.status(401).json({ error: 'User profile not found' });
+      return res.status(401).json({ error: 'Failed to fetch user profile' });
     }
 
     if (!profile) {
