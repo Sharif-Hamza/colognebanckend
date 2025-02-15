@@ -72,7 +72,18 @@ async function verifyAuth(req, res, next) {
       try {
         const decoded = JSON.parse(atob(token.split('.')[1]));
         if (decoded.sub) {
-          req.user = { id: decoded.sub };
+          // Get user profile directly
+          const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', decoded.sub)
+            .single();
+
+          if (profileError || !profile) {
+            return res.status(401).json({ error: 'User profile not found' });
+          }
+
+          req.user = { id: decoded.sub, email: profile.email };
           return next();
         }
       } catch (e) {
@@ -85,8 +96,19 @@ async function verifyAuth(req, res, next) {
       return res.status(401).json({ error: 'User not found' });
     }
 
+    // Get user profile
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    if (profileError || !profile) {
+      return res.status(401).json({ error: 'User profile not found' });
+    }
+
     // Store user in request for later use
-    req.user = user;
+    req.user = { ...user, profile };
     next();
   } catch (error) {
     console.error('Auth error:', error);
@@ -103,21 +125,9 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Verify user exists in Supabase
-    const { data: user, error: userError } = await supabase
-      .from('profiles')
-      .select('id, email')
-      .eq('id', user_id)
-      .single();
-
-    if (userError || !user) {
-      console.error('User verification error:', userError);
-      return res.status(401).json({ error: 'User not found' });
-    }
-
-    // Verify email matches
-    if (user.email !== customer_email) {
-      return res.status(401).json({ error: 'Email mismatch' });
+    // User is already verified in middleware, just check if IDs match
+    if (req.user.id !== user_id) {
+      return res.status(401).json({ error: 'User ID mismatch' });
     }
 
     // Create Stripe checkout session
@@ -129,7 +139,7 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       cancel_url,
       customer_email,
       metadata: {
-        user_id: user.id
+        user_id: user_id
       },
       shipping_address_collection: {
         allowed_countries: ['US', 'CA', 'GB'],
