@@ -27,10 +27,12 @@ const supabase = createClient(
 
 // CORS middleware with preflight support
 app.use(cors({
-  origin: process.env.CORS_ORIGIN,
+  origin: '*', // Allow all origins in development
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
 // Handle preflight requests
@@ -63,9 +65,13 @@ async function verifyAuth(req, res, next) {
     // Verify the JWT token with Supabase
     const { data: { user }, error } = await supabase.auth.getUser(token);
 
-    if (error || !user) {
+    if (error) {
       console.error('Token verification error:', error);
       return res.status(401).json({ error: 'Invalid authentication token' });
+    }
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
     }
 
     // Store user in request for later use
