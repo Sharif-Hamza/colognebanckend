@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
@@ -32,11 +33,21 @@ console.log('Initializing Supabase with:', {
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error('Missing required Supabase configuration');
+// Validate Supabase URL format
+if (!supabaseUrl?.startsWith('https://') || !supabaseUrl?.includes('.supabase.co')) {
+  console.error('Invalid Supabase URL format');
   process.exit(1);
 }
 
+// Validate service role key format (should be a JWT)
+if (!supabaseKey?.includes('.') || supabaseKey?.split('.').length !== 3) {
+  console.error('Invalid Supabase service role key format');
+  process.exit(1);
+}
+
+console.log('Supabase configuration validation passed');
+
+// Create Supabase client with explicit options
 const supabase = createClient(
   supabaseUrl,
   supabaseKey,
@@ -45,11 +56,16 @@ const supabase = createClient(
       autoRefreshToken: false,
       persistSession: false,
       detectSessionInUrl: false
+    },
+    global: {
+      headers: {
+        'Authorization': `Bearer ${supabaseKey}`
+      }
     }
   }
 );
 
-// Test Supabase connection and log more details
+// Test Supabase connection with more detailed error handling
 supabase.auth.getSession().then(({ data, error }) => {
   if (error) {
     console.error('Supabase connection test failed:', error);
@@ -58,9 +74,13 @@ supabase.auth.getSession().then(({ data, error }) => {
       key_prefix: supabaseKey.substring(0, 10) + '...',
       key_length: supabaseKey.length
     });
+    // Don't exit process here, but log the error
+    console.error('WARNING: Supabase connection test failed but continuing...');
   } else {
     console.log('Supabase connection test successful');
   }
+}).catch(error => {
+  console.error('Unexpected error during Supabase connection test:', error);
 });
 
 // CORS middleware with preflight support
@@ -132,6 +152,51 @@ async function verifyAuth(req, res, next) {
       if (profileError) {
         console.error('Profile fetch error:', profileError);
         console.error('Full error:', JSON.stringify(profileError, null, 2));
+        
+        // Try to refresh the Supabase client if we get an invalid API key error
+        if (profileError.message?.includes('Invalid API key')) {
+          console.log('Attempting to refresh Supabase client...');
+          // Recreate the client
+          const newClient = createClient(supabaseUrl, supabaseKey, {
+            auth: {
+              autoRefreshToken: false,
+              persistSession: false,
+              detectSessionInUrl: false
+            },
+            global: {
+              headers: {
+                'Authorization': `Bearer ${supabaseKey}`
+              }
+            }
+          });
+          
+          // Try the query again
+          const { data: retryProfile, error: retryError } = await newClient
+            .from('profiles')
+            .select('*')
+            .eq('id', decoded.sub)
+            .single();
+            
+          if (retryError) {
+            console.error('Retry profile fetch error:', retryError);
+            return res.status(401).json({ 
+              error: 'Failed to fetch user profile after retry',
+              details: retryError.message
+            });
+          }
+          
+          if (retryProfile) {
+            console.log('Profile found after retry:', { id: retryProfile.id });
+            req.user = { 
+              id: decoded.sub, 
+              email: retryProfile.email, 
+              profile: retryProfile,
+              auth_method: 'jwt'
+            };
+            return next();
+          }
+        }
+        
         return res.status(401).json({ 
           error: 'Failed to fetch user profile',
           details: profileError.message
