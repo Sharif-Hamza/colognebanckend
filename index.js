@@ -1,3 +1,4 @@
+// ES Module imports
 import { default as express } from 'express';
 import { default as cors } from 'cors';
 import { config } from 'dotenv';
@@ -131,8 +132,8 @@ async function verifyAuth(req, res, next) {
 
     console.log('Attempting to verify token...');
     
-    // First try to decode the JWT to get the user ID
     try {
+      // First try to decode the JWT to get the user ID
       const decoded = JSON.parse(atob(token.split('.')[1]));
       console.log('JWT decode successful:', { sub: decoded.sub });
       
@@ -141,8 +142,26 @@ async function verifyAuth(req, res, next) {
         return res.status(401).json({ error: 'Invalid token format' });
       }
 
+      // Create a new Supabase client for this request
+      const requestClient = createClient(
+        supabaseUrl,
+        supabaseKey,
+        {
+          auth: {
+            autoRefreshToken: false,
+            persistSession: false,
+            detectSessionInUrl: false
+          },
+          global: {
+            headers: {
+              'Authorization': `Bearer ${supabaseKey}`
+            }
+          }
+        }
+      );
+
       // Get user profile directly using service role
-      const { data: profile, error: profileError } = await supabase
+      const { data: profile, error: profileError } = await requestClient
         .from('profiles')
         .select('*')
         .eq('id', decoded.sub)
@@ -151,51 +170,6 @@ async function verifyAuth(req, res, next) {
       if (profileError) {
         console.error('Profile fetch error:', profileError);
         console.error('Full error:', JSON.stringify(profileError, null, 2));
-        
-        // Try to refresh the Supabase client if we get an invalid API key error
-        if (profileError.message?.includes('Invalid API key')) {
-          console.log('Attempting to refresh Supabase client...');
-          // Recreate the client
-          const newClient = createClient(supabaseUrl, supabaseKey, {
-            auth: {
-              autoRefreshToken: false,
-              persistSession: false,
-              detectSessionInUrl: false
-            },
-            global: {
-              headers: {
-                'Authorization': `Bearer ${supabaseKey}`
-              }
-            }
-          });
-          
-          // Try the query again
-          const { data: retryProfile, error: retryError } = await newClient
-            .from('profiles')
-            .select('*')
-            .eq('id', decoded.sub)
-            .single();
-            
-          if (retryError) {
-            console.error('Retry profile fetch error:', retryError);
-            return res.status(401).json({ 
-              error: 'Failed to fetch user profile after retry',
-              details: retryError.message
-            });
-          }
-          
-          if (retryProfile) {
-            console.log('Profile found after retry:', { id: retryProfile.id });
-            req.user = { 
-              id: decoded.sub, 
-              email: retryProfile.email, 
-              profile: retryProfile,
-              auth_method: 'jwt'
-            };
-            return next();
-          }
-        }
-        
         return res.status(401).json({ 
           error: 'Failed to fetch user profile',
           details: profileError.message
@@ -210,7 +184,7 @@ async function verifyAuth(req, res, next) {
         });
       }
 
-      console.log('Profile found via JWT:', { id: profile.id });
+      console.log('Profile found:', { id: profile.id });
       req.user = { 
         id: decoded.sub, 
         email: profile.email, 
@@ -218,64 +192,14 @@ async function verifyAuth(req, res, next) {
         auth_method: 'jwt'
       };
       return next();
+
     } catch (e) {
-      console.error('JWT decode error:', e);
-      // Continue to try Supabase auth if JWT fails
-    }
-
-    // If JWT decode fails, try Supabase auth
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-
-    if (authError) {
-      console.error('Token verification error:', authError);
+      console.error('JWT decode/verification error:', e);
       return res.status(401).json({ 
         error: 'Invalid authentication token',
-        details: authError.message
+        details: e.message
       });
     }
-
-    if (!user) {
-      console.error('No user found from token');
-      return res.status(401).json({ 
-        error: 'User not found',
-        details: 'Please sign in again'
-      });
-    }
-
-    console.log('User found from token:', { id: user.id });
-
-    // Get user profile
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single();
-
-    if (profileError) {
-      console.error('Profile fetch error:', profileError);
-      return res.status(401).json({ 
-        error: 'Failed to fetch user profile',
-        details: profileError.message
-      });
-    }
-
-    if (!profile) {
-      console.error('No profile found for user:', user.id);
-      return res.status(401).json({ 
-        error: 'User profile not found',
-        details: 'Please complete your profile setup'
-      });
-    }
-
-    console.log('Profile found:', { id: profile.id });
-
-    // Store user in request for later use
-    req.user = { 
-      ...user, 
-      profile,
-      auth_method: 'supabase'
-    };
-    next();
   } catch (error) {
     console.error('Auth error:', error);
     return res.status(401).json({ 
