@@ -100,10 +100,16 @@ async function verifyAuth(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
-      return res.status(401).json({ error: 'No authorization header' });
+      console.error('No authorization header provided');
+      return res.status(401).json({ error: 'Authentication required' });
     }
 
     const token = authHeader.replace('Bearer ', '');
+    if (!token) {
+      console.error('No token provided in authorization header');
+      return res.status(401).json({ error: 'Authentication token required' });
+    }
+
     console.log('Attempting to verify token...');
     
     // First try to decode the JWT to get the user ID
@@ -111,45 +117,65 @@ async function verifyAuth(req, res, next) {
       const decoded = JSON.parse(atob(token.split('.')[1]));
       console.log('JWT decode successful:', { sub: decoded.sub });
       
-      if (decoded.sub) {
-        // Get user profile directly using RLS bypass
-        const { data: profile, error: profileError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', decoded.sub)
-          .single();
-
-        if (profileError) {
-          console.error('Profile fetch error:', profileError);
-          // Log the actual error details
-          console.error('Full error:', JSON.stringify(profileError, null, 2));
-          return res.status(401).json({ error: 'Failed to fetch user profile' });
-        }
-
-        if (!profile) {
-          console.error('No profile found for user:', decoded.sub);
-          return res.status(401).json({ error: 'User profile not found' });
-        }
-
-        console.log('Profile found via JWT:', { id: profile.id });
-        req.user = { id: decoded.sub, email: profile.email, profile };
-        return next();
+      if (!decoded.sub) {
+        console.error('No user ID in JWT');
+        return res.status(401).json({ error: 'Invalid token format' });
       }
+
+      // Get user profile directly using service role
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', decoded.sub)
+        .single();
+
+      if (profileError) {
+        console.error('Profile fetch error:', profileError);
+        console.error('Full error:', JSON.stringify(profileError, null, 2));
+        return res.status(401).json({ 
+          error: 'Failed to fetch user profile',
+          details: profileError.message
+        });
+      }
+
+      if (!profile) {
+        console.error('No profile found for user:', decoded.sub);
+        return res.status(401).json({ 
+          error: 'User profile not found',
+          details: 'Please ensure you have completed your profile setup'
+        });
+      }
+
+      console.log('Profile found via JWT:', { id: profile.id });
+      req.user = { 
+        id: decoded.sub, 
+        email: profile.email, 
+        profile,
+        auth_method: 'jwt'
+      };
+      return next();
     } catch (e) {
       console.error('JWT decode error:', e);
+      // Continue to try Supabase auth if JWT fails
     }
 
     // If JWT decode fails, try Supabase auth
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
 
-    if (error) {
-      console.error('Token verification error:', error);
-      return res.status(401).json({ error: 'Invalid authentication token' });
+    if (authError) {
+      console.error('Token verification error:', authError);
+      return res.status(401).json({ 
+        error: 'Invalid authentication token',
+        details: authError.message
+      });
     }
 
     if (!user) {
       console.error('No user found from token');
-      return res.status(401).json({ error: 'User not found' });
+      return res.status(401).json({ 
+        error: 'User not found',
+        details: 'Please sign in again'
+      });
     }
 
     console.log('User found from token:', { id: user.id });
@@ -163,22 +189,35 @@ async function verifyAuth(req, res, next) {
 
     if (profileError) {
       console.error('Profile fetch error:', profileError);
-      return res.status(401).json({ error: 'Failed to fetch user profile' });
+      return res.status(401).json({ 
+        error: 'Failed to fetch user profile',
+        details: profileError.message
+      });
     }
 
     if (!profile) {
       console.error('No profile found for user:', user.id);
-      return res.status(401).json({ error: 'User profile not found' });
+      return res.status(401).json({ 
+        error: 'User profile not found',
+        details: 'Please complete your profile setup'
+      });
     }
 
     console.log('Profile found:', { id: profile.id });
 
     // Store user in request for later use
-    req.user = { ...user, profile };
+    req.user = { 
+      ...user, 
+      profile,
+      auth_method: 'supabase'
+    };
     next();
   } catch (error) {
     console.error('Auth error:', error);
-    return res.status(401).json({ error: 'Authentication failed', details: error.message });
+    return res.status(401).json({ 
+      error: 'Authentication failed', 
+      details: error.message 
+    });
   }
 }
 
@@ -187,14 +226,32 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
   try {
     const { line_items, success_url, cancel_url, customer_email, user_id } = req.body;
 
-    if (!line_items || !success_url || !cancel_url || !customer_email || !user_id) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    // Validate required fields
+    if (!line_items || !Array.isArray(line_items) || line_items.length === 0) {
+      return res.status(400).json({ error: 'Invalid or empty line items' });
+    }
+
+    if (!success_url || !cancel_url) {
+      return res.status(400).json({ error: 'Missing success or cancel URLs' });
+    }
+
+    if (!customer_email || !user_id) {
+      return res.status(400).json({ error: 'Missing customer information' });
     }
 
     // User is already verified in middleware, just check if IDs match
     if (req.user.id !== user_id) {
-      return res.status(401).json({ error: 'User ID mismatch' });
+      console.error('User ID mismatch:', { 
+        requestUserId: user_id, 
+        tokenUserId: req.user.id 
+      });
+      return res.status(401).json({ 
+        error: 'User ID mismatch',
+        details: 'The provided user ID does not match the authenticated user'
+      });
     }
+
+    console.log('Creating Stripe checkout session for user:', user_id);
 
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
@@ -205,7 +262,8 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       cancel_url,
       customer_email,
       metadata: {
-        user_id: user_id
+        user_id: user_id,
+        auth_method: req.user.auth_method
       },
       shipping_address_collection: {
         allowed_countries: ['US', 'CA', 'GB'],
@@ -236,10 +294,14 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       billing_address_collection: 'required',
     });
 
+    console.log('Checkout session created:', { sessionId: session.id });
     res.json({ sessionId: session.id });
   } catch (error) {
     console.error('Error creating checkout session:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      error: 'Failed to create checkout session',
+      details: error.message
+    });
   }
 });
 
