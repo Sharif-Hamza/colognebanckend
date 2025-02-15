@@ -133,38 +133,32 @@ async function verifyAuth(req, res, next) {
     console.log('Attempting to verify token...');
     
     try {
-      // First try to decode the JWT to get the user ID
-      const decoded = JSON.parse(atob(token.split('.')[1]));
-      console.log('JWT decode successful:', { sub: decoded.sub });
+      // First verify the token with Supabase
+      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
       
-      if (!decoded.sub) {
-        console.error('No user ID in JWT');
-        return res.status(401).json({ error: 'Invalid token format' });
+      if (authError) {
+        console.error('Token verification error:', authError);
+        return res.status(401).json({ 
+          error: 'Invalid authentication token',
+          details: authError.message
+        });
       }
 
-      // Create a new Supabase client for this request
-      const requestClient = createClient(
-        supabaseUrl,
-        supabaseKey,
-        {
-          auth: {
-            autoRefreshToken: false,
-            persistSession: false,
-            detectSessionInUrl: false
-          },
-          global: {
-            headers: {
-              'Authorization': `Bearer ${supabaseKey}`
-            }
-          }
-        }
-      );
+      if (!user) {
+        console.error('No user found from token');
+        return res.status(401).json({ 
+          error: 'User not found',
+          details: 'Please sign in again'
+        });
+      }
 
-      // Get user profile directly using service role
-      const { data: profile, error: profileError } = await requestClient
+      console.log('User verified:', { id: user.id });
+
+      // Get user profile using the service role client
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('*')
-        .eq('id', decoded.sub)
+        .eq('id', user.id)
         .single();
 
       if (profileError) {
@@ -177,7 +171,7 @@ async function verifyAuth(req, res, next) {
       }
 
       if (!profile) {
-        console.error('No profile found for user:', decoded.sub);
+        console.error('No profile found for user:', user.id);
         return res.status(401).json({ 
           error: 'User profile not found',
           details: 'Please ensure you have completed your profile setup'
@@ -186,17 +180,17 @@ async function verifyAuth(req, res, next) {
 
       console.log('Profile found:', { id: profile.id });
       req.user = { 
-        id: decoded.sub, 
-        email: profile.email, 
+        id: user.id, 
+        email: user.email, 
         profile,
-        auth_method: 'jwt'
+        auth_method: 'supabase'
       };
       return next();
 
     } catch (e) {
-      console.error('JWT decode/verification error:', e);
+      console.error('Auth verification error:', e);
       return res.status(401).json({ 
-        error: 'Invalid authentication token',
+        error: 'Authentication failed',
         details: e.message
       });
     }
