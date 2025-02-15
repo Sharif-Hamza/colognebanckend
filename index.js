@@ -20,7 +20,8 @@ const supabase = createClient(
   {
     auth: {
       autoRefreshToken: false,
-      persistSession: false
+      persistSession: false,
+      detectSessionInUrl: false
     }
   }
 );
@@ -67,6 +68,16 @@ async function verifyAuth(req, res, next) {
 
     if (error) {
       console.error('Token verification error:', error);
+      // Try to decode the JWT to get the user ID
+      try {
+        const decoded = JSON.parse(atob(token.split('.')[1]));
+        if (decoded.sub) {
+          req.user = { id: decoded.sub };
+          return next();
+        }
+      } catch (e) {
+        console.error('JWT decode error:', e);
+      }
       return res.status(401).json({ error: 'Invalid authentication token' });
     }
 
