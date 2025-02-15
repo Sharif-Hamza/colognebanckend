@@ -1,12 +1,11 @@
-import express from 'express';
-import cors from 'cors';import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import Stripe from 'stripe';
+import { default as express } from 'express';
+import { default as cors } from 'cors';
+import { config } from 'dotenv';
+import { default as Stripe } from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 
 // Load environment variables
-dotenv.config();
+config();
 
 // Initialize Express app
 const app = express();
