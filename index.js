@@ -10,13 +10,22 @@ dotenv.config();
 // Initialize Express app
 const app = express();
 
+// Log environment variables (excluding sensitive data)
+console.log('Environment Check:', {
+  SUPABASE_URL: process.env.SUPABASE_URL ? 'Set' : 'Not Set',
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ? 'Set' : 'Not Set',
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ? 'Set' : 'Not Set',
+  STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET ? 'Set' : 'Not Set',
+  NODE_ENV: process.env.NODE_ENV,
+});
+
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Initialize Supabase client with service role key
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY, // Fallback to anon key if service role key is not available
   {
     auth: {
       autoRefreshToken: false,
@@ -25,6 +34,21 @@ const supabase = createClient(
     }
   }
 );
+
+// Test Supabase connection and log more details
+supabase.auth.getSession().then(({ data, error }) => {
+  if (error) {
+    console.error('Supabase connection test failed:', error);
+    console.error('Current environment:', {
+      SUPABASE_URL_LENGTH: process.env.SUPABASE_URL?.length || 0,
+      SUPABASE_SERVICE_ROLE_KEY_LENGTH: process.env.SUPABASE_SERVICE_ROLE_KEY?.length || 0,
+      SUPABASE_ANON_KEY_LENGTH: process.env.SUPABASE_ANON_KEY?.length || 0,
+      NODE_ENV: process.env.NODE_ENV
+    });
+  } else {
+    console.log('Supabase connection test successful');
+  }
+});
 
 // CORS middleware with preflight support
 app.use(cors({
@@ -50,7 +74,12 @@ app.use((req, res, next) => {
 
 // Health check endpoint
 app.get('/', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    supabase_url: process.env.SUPABASE_URL ? 'configured' : 'missing',
+    stripe: process.env.STRIPE_SECRET_KEY ? 'configured' : 'missing'
+  });
 });
 
 // Verify Supabase token middleware
@@ -62,15 +91,20 @@ async function verifyAuth(req, res, next) {
     }
 
     const token = authHeader.replace('Bearer ', '');
+    console.log('Attempting to verify token...');
     
-    // Verify the JWT token with Supabase
+    // First try to get user with Supabase auth
     const { data: { user }, error } = await supabase.auth.getUser(token);
 
     if (error) {
       console.error('Token verification error:', error);
-      // Try to decode the JWT to get the user ID
+      console.log('Attempting JWT fallback...');
+      
+      // Fallback: Try to decode the JWT
       try {
         const decoded = JSON.parse(atob(token.split('.')[1]));
+        console.log('JWT decode successful:', { sub: decoded.sub });
+        
         if (decoded.sub) {
           // Get user profile directly
           const { data: profile, error: profileError } = await supabase
@@ -79,10 +113,17 @@ async function verifyAuth(req, res, next) {
             .eq('id', decoded.sub)
             .single();
 
-          if (profileError || !profile) {
+          if (profileError) {
+            console.error('Profile fetch error:', profileError);
             return res.status(401).json({ error: 'User profile not found' });
           }
 
+          if (!profile) {
+            console.error('No profile found for user:', decoded.sub);
+            return res.status(401).json({ error: 'User profile not found' });
+          }
+
+          console.log('Profile found via JWT fallback');
           req.user = { id: decoded.sub, email: profile.email };
           return next();
         }
@@ -93,8 +134,11 @@ async function verifyAuth(req, res, next) {
     }
 
     if (!user) {
+      console.error('No user found from token');
       return res.status(401).json({ error: 'User not found' });
     }
+
+    console.log('User found from token:', { id: user.id });
 
     // Get user profile
     const { data: profile, error: profileError } = await supabase
@@ -103,9 +147,17 @@ async function verifyAuth(req, res, next) {
       .eq('id', user.id)
       .single();
 
-    if (profileError || !profile) {
+    if (profileError) {
+      console.error('Profile fetch error:', profileError);
       return res.status(401).json({ error: 'User profile not found' });
     }
+
+    if (!profile) {
+      console.error('No profile found for user:', user.id);
+      return res.status(401).json({ error: 'User profile not found' });
+    }
+
+    console.log('Profile found:', { id: profile.id });
 
     // Store user in request for later use
     req.user = { ...user, profile };
