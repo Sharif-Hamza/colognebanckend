@@ -312,7 +312,12 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
     console.log('Creating checkout session for user:', {
       userId: req.user.id,
       email: req.user.email.substring(0, 3) + '...',
-      itemCount: line_items.length
+      itemCount: line_items.length,
+      lineItems: line_items.map(item => ({
+        quantity: item.quantity,
+        amount: item.price_data.unit_amount,
+        product: item.price_data.product_data.name
+      }))
     });
 
     // Create Stripe checkout session
@@ -343,12 +348,17 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
         }
       ],
       allow_promotion_codes: true,
-      billing_address_collection: 'required'
+      billing_address_collection: 'required',
+      submit_type: 'pay',
+      payment_intent_data: {
+        capture_method: 'automatic',
+      }
     });
 
     console.log('Stripe session created:', {
       sessionId: session.id,
-      amount: session.amount_total
+      amount: session.amount_total,
+      url: session.url
     });
 
     // Create order in Supabase
@@ -359,7 +369,8 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
         stripe_session_id: session.id,
         status: 'pending',
         total: session.amount_total / 100,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        line_items: line_items
       });
 
     if (orderError) {
@@ -371,9 +382,18 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
     }
 
     console.log('Order created successfully');
-    res.json({ sessionId: session.id });
+    res.json({ 
+      sessionId: session.id,
+      url: session.url
+    });
   } catch (error) {
-    console.error('Checkout error:', error);
+    console.error('Checkout error:', {
+      message: error.message,
+      type: error.type,
+      code: error.code,
+      param: error.param,
+      detail: error.detail
+    });
     res.status(500).json({ 
       error: 'Checkout failed',
       details: error.message
