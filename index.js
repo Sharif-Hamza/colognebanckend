@@ -82,18 +82,34 @@ async function verifyAuth(req, res, next) {
     }
 
     // Get user profile
-    const { data: profile, error: profileError } = await supabaseAdmin
+    let { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('*')
       .eq('id', user.id)
       .single();
 
-    if (profileError || !profile) {
-      console.error('Profile error:', profileError);
-      return res.status(401).json({ 
-        error: 'User profile not found',
-        details: profileError?.message
-      });
+    // If profile doesn't exist, create it
+    if (!profile) {
+      console.log('Creating profile for user:', user.id);
+      const { data: newProfile, error: createError } = await supabaseAdmin
+        .from('profiles')
+        .insert({
+          id: user.id,
+          email: user.email,
+          updated_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+
+      if (createError) {
+        console.error('Profile creation error:', createError);
+        return res.status(500).json({ 
+          error: 'Failed to create user profile',
+          details: createError.message
+        });
+      }
+
+      profile = newProfile;
     }
 
     req.user = {
