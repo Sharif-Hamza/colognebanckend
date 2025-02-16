@@ -8,13 +8,44 @@ import { createClient } from '@supabase/supabase-js';
 // Load environment variables
 config();
 
+// Log environment variables (safely)
+console.log('Environment variables check:', {
+  SUPABASE_URL_SET: !!process.env.SUPABASE_URL,
+  SUPABASE_URL_LENGTH: process.env.SUPABASE_URL?.length,
+  SUPABASE_SERVICE_ROLE_KEY_SET: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_SERVICE_ROLE_KEY_LENGTH: process.env.SUPABASE_SERVICE_ROLE_KEY?.length,
+  SUPABASE_ANON_KEY_SET: !!process.env.SUPABASE_ANON_KEY,
+  SUPABASE_ANON_KEY_LENGTH: process.env.SUPABASE_ANON_KEY?.length,
+  STRIPE_SECRET_KEY_SET: !!process.env.STRIPE_SECRET_KEY,
+  STRIPE_SECRET_KEY_LENGTH: process.env.STRIPE_SECRET_KEY?.length,
+  NODE_ENV: process.env.NODE_ENV
+});
+
 // Initialize Express app
 const app = express();
+
+// Initialize Stripe with error handling
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error('STRIPE_SECRET_KEY is not set');
+}
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2023-10-16'
 });
+
+// Validate Supabase configuration
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_URL.includes('supabase.co')) {
+  throw new Error('Invalid or missing SUPABASE_URL');
+}
+
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.SUPABASE_SERVICE_ROLE_KEY.includes('.')) {
+  throw new Error('Invalid or missing SUPABASE_SERVICE_ROLE_KEY');
+}
+
+if (!process.env.SUPABASE_ANON_KEY || !process.env.SUPABASE_ANON_KEY.includes('.')) {
+  throw new Error('Invalid or missing SUPABASE_ANON_KEY');
+}
 
 // Initialize Supabase Admin client
 const supabaseAdmin = createClient(
@@ -27,6 +58,21 @@ const supabaseAdmin = createClient(
     }
   }
 );
+
+// Test Supabase connection
+supabaseAdmin
+  .from('profiles')
+  .select('count', { count: 'exact', head: true })
+  .then(({ count, error }) => {
+    if (error) {
+      console.error('Supabase connection test failed:', error);
+    } else {
+      console.log('Supabase connection test successful. Profile count:', count);
+    }
+  })
+  .catch(error => {
+    console.error('Unexpected error testing Supabase connection:', error);
+  });
 
 // Initialize Supabase Auth client
 const supabaseAuth = createClient(
@@ -91,42 +137,52 @@ async function verifyAuth(req, res, next) {
     // If profile doesn't exist, create it
     if (!profile) {
       console.log('Creating profile for user:', user.id);
+      
+      const profileData = {
+        id: user.id,
+        email: user.email,
+        full_name: user.user_metadata?.full_name || '',
+        shipping_address: user.user_metadata?.shipping_address || null,
+        created_at: new Date().toISOString()
+      };
+
+      console.log('Attempting to create profile with data:', {
+        ...profileData,
+        email: profileData.email.substring(0, 3) + '...' // Log partial email for privacy
+      });
+
       const { data: newProfile, error: createError } = await supabaseAdmin
         .from('profiles')
-        .insert({
-          id: user.id,
-          email: user.email,
-          full_name: user.user_metadata?.full_name || '',
-          shipping_address: user.user_metadata?.shipping_address || null,
-          created_at: new Date().toISOString()
-        })
+        .insert(profileData)
         .select()
         .single();
 
       if (createError) {
         console.error('Profile creation error:', createError);
-        // Log more details about the error and user data
         console.error('Error details:', {
           error: createError,
+          code: createError.code,
+          message: createError.message,
+          details: createError.details,
+          hint: createError.hint,
           userId: user.id,
-          userEmail: user.email,
+          userEmail: user.email.substring(0, 3) + '...',
           userMetadata: user.user_metadata
         });
         return res.status(500).json({ 
           error: 'Failed to create user profile',
-          details: createError.message
+          details: createError.message,
+          code: createError.code
         });
       }
 
       profile = newProfile;
+      console.log('Profile created successfully:', {
+        id: profile.id,
+        email: profile.email.substring(0, 3) + '...',
+        created_at: profile.created_at
+      });
     }
-
-    // Log successful profile creation/retrieval
-    console.log('Profile loaded:', {
-      id: profile.id,
-      email: profile.email,
-      created_at: profile.created_at
-    });
 
     req.user = {
       id: user.id,
