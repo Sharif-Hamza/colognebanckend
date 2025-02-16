@@ -18,6 +18,8 @@ console.log('Environment variables check:', {
   SUPABASE_ANON_KEY_LENGTH: process.env.SUPABASE_ANON_KEY?.length,
   STRIPE_SECRET_KEY_SET: !!process.env.STRIPE_SECRET_KEY,
   STRIPE_SECRET_KEY_LENGTH: process.env.STRIPE_SECRET_KEY?.length,
+  STRIPE_WEBHOOK_SECRET_SET: !!process.env.STRIPE_WEBHOOK_SECRET,
+  STRIPE_WEBHOOK_SECRET_LENGTH: process.env.STRIPE_WEBHOOK_SECRET?.length,
   NODE_ENV: process.env.NODE_ENV
 });
 
@@ -27,6 +29,10 @@ const app = express();
 // Initialize Stripe with error handling
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('STRIPE_SECRET_KEY is not set');
+}
+
+if (!process.env.STRIPE_WEBHOOK_SECRET) {
+  throw new Error('STRIPE_WEBHOOK_SECRET is not set');
 }
 
 // Initialize Stripe
@@ -64,19 +70,24 @@ const supabaseAdmin = createClient(
 // Test Supabase connection with detailed error logging
 async function testSupabaseConnection() {
   try {
-    console.log('Testing Supabase connection...');
+    console.log('Testing Supabase connection with URL:', process.env.SUPABASE_URL);
+    console.log('Service Role Key length:', process.env.SUPABASE_SERVICE_ROLE_KEY?.length);
     
     // First test auth
-    const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    const { data: authData, error: authError } = await supabaseAdmin.auth.getUser();
     if (authError) {
       console.error('Supabase auth test failed:', {
         error: authError,
         message: authError.message,
         details: authError.details,
-        hint: authError.hint
+        hint: authError.hint,
+        status: authError.status
       });
     } else {
-      console.log('Supabase auth test successful');
+      console.log('Supabase auth test successful:', {
+        user: authData ? 'present' : 'missing',
+        timestamp: new Date().toISOString()
+      });
     }
 
     // Then test database
@@ -96,22 +107,29 @@ async function testSupabaseConnection() {
       throw dbError;
     }
 
-    console.log('Supabase database test successful. Sample data:', data);
+    console.log('Supabase database test successful:', {
+      dataPresent: !!data,
+      recordCount: data?.length,
+      timestamp: new Date().toISOString()
+    });
     return true;
   } catch (error) {
     console.error('Unexpected error testing Supabase connection:', {
-      error,
-      message: error.message,
-      stack: error.stack
+      error: error.message,
+      name: error.name,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
     });
     return false;
   }
 }
 
-// Run the connection test
+// Run the connection test immediately
 testSupabaseConnection().then(success => {
   if (!success) {
-    console.error('Supabase connection test failed. Check your environment variables and network connectivity.');
+    console.error('Supabase connection test failed - check credentials and network connectivity');
+  } else {
+    console.log('Supabase connection test completed successfully');
   }
 });
 
@@ -129,13 +147,13 @@ const supabaseAuth = createClient(
 
 // CORS configuration
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:5174', 'https://celebrated-hotteok-98d8df.netlify.app'],
+  origin: process.env.CORS_ORIGIN || 'https://celebrated-hotteok-98d8df.netlify.app',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
 
-// Parse JSON bodies
+// Parse JSON bodies (except for Stripe webhook)
 app.use((req, res, next) => {
   if (req.path === '/api/webhook') {
     next();
@@ -286,6 +304,12 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       return res.status(400).json({ error: 'No items in cart' });
     }
 
+    console.log('Creating checkout session for user:', {
+      userId: req.user.id,
+      email: req.user.email.substring(0, 3) + '...',
+      itemCount: line_items.length
+    });
+
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -312,7 +336,14 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
             },
           },
         }
-      ]
+      ],
+      allow_promotion_codes: true,
+      billing_address_collection: 'required'
+    });
+
+    console.log('Stripe session created:', {
+      sessionId: session.id,
+      amount: session.amount_total
     });
 
     // Create order in Supabase
@@ -322,7 +353,8 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
         user_id: req.user.id,
         stripe_session_id: session.id,
         status: 'pending',
-        total: session.amount_total / 100
+        total: session.amount_total / 100,
+        created_at: new Date().toISOString()
       });
 
     if (orderError) {
@@ -333,6 +365,7 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       });
     }
 
+    console.log('Order created successfully');
     res.json({ sessionId: session.id });
   } catch (error) {
     console.error('Checkout error:', error);
@@ -363,6 +396,11 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
       
+      console.log('Processing completed checkout session:', {
+        sessionId: session.id,
+        userId: session.metadata.user_id
+      });
+
       // Update order status
       const { error: updateError } = await supabaseAdmin
         .from('orders')
@@ -380,6 +418,8 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
         return res.status(500).json({ error: 'Failed to update order' });
       }
 
+      console.log('Order updated successfully');
+
       // Clear cart
       const { error: cartError } = await supabaseAdmin
         .from('cart_items')
@@ -389,6 +429,8 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
       if (cartError) {
         console.error('Cart clear error:', cartError);
         // Don't return error here, as the order is already updated
+      } else {
+        console.log('Cart cleared successfully');
       }
     }
 
@@ -406,6 +448,7 @@ app.get('/', (req, res) => {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
     stripe: process.env.STRIPE_SECRET_KEY ? 'configured' : 'missing',
+    stripe_webhook: process.env.STRIPE_WEBHOOK_SECRET ? 'configured' : 'missing',
     supabase: process.env.SUPABASE_URL ? 'configured' : 'missing'
   });
 });
@@ -413,5 +456,5 @@ app.get('/', (req, res) => {
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
 });
