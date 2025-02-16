@@ -73,19 +73,20 @@ async function testSupabaseConnection() {
     console.log('Testing Supabase connection with URL:', process.env.SUPABASE_URL);
     console.log('Service Role Key length:', process.env.SUPABASE_SERVICE_ROLE_KEY?.length);
     
-    // First test auth
-    const { data: authData, error: authError } = await supabaseAdmin.auth.getUser();
-    if (authError) {
-      console.error('Supabase auth test failed:', {
-        error: authError,
-        message: authError.message,
-        details: authError.details,
-        hint: authError.hint,
-        status: authError.status
+    // First test auth capabilities
+    const { data: { users }, error: listUsersError } = await supabaseAdmin.auth.admin.listUsers();
+    
+    if (listUsersError) {
+      console.error('Supabase auth admin test failed:', {
+        error: listUsersError,
+        message: listUsersError.message,
+        details: listUsersError.details,
+        hint: listUsersError.hint,
+        status: listUsersError.status
       });
     } else {
-      console.log('Supabase auth test successful:', {
-        user: authData ? 'present' : 'missing',
+      console.log('Supabase auth admin test successful:', {
+        usersCount: users?.length,
         timestamp: new Date().toISOString()
       });
     }
