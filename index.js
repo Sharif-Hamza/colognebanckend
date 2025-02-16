@@ -96,13 +96,22 @@ async function verifyAuth(req, res, next) {
         .insert({
           id: user.id,
           email: user.email,
-          updated_at: new Date().toISOString()
+          full_name: user.user_metadata?.full_name || '',
+          shipping_address: user.user_metadata?.shipping_address || null,
+          created_at: new Date().toISOString()
         })
         .select()
         .single();
 
       if (createError) {
         console.error('Profile creation error:', createError);
+        // Log more details about the error and user data
+        console.error('Error details:', {
+          error: createError,
+          userId: user.id,
+          userEmail: user.email,
+          userMetadata: user.user_metadata
+        });
         return res.status(500).json({ 
           error: 'Failed to create user profile',
           details: createError.message
@@ -111,6 +120,13 @@ async function verifyAuth(req, res, next) {
 
       profile = newProfile;
     }
+
+    // Log successful profile creation/retrieval
+    console.log('Profile loaded:', {
+      id: profile.id,
+      email: profile.email,
+      created_at: profile.created_at
+    });
 
     req.user = {
       id: user.id,
@@ -191,6 +207,62 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       error: 'Checkout failed',
       details: error.message
     });
+  }
+});
+
+// Webhook endpoint
+app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      
+      // Update order status
+      const { error: updateError } = await supabaseAdmin
+        .from('orders')
+        .update({
+          status: 'completed',
+          payment_status: session.payment_status,
+          shipping_details: session.shipping_details,
+          payment_intent: session.payment_intent,
+          updated_at: new Date().toISOString()
+        })
+        .eq('stripe_session_id', session.id);
+
+      if (updateError) {
+        console.error('Order update error:', updateError);
+        return res.status(500).json({ error: 'Failed to update order' });
+      }
+
+      // Clear cart
+      const { error: cartError } = await supabaseAdmin
+        .from('cart_items')
+        .delete()
+        .eq('user_id', session.metadata.user_id);
+
+      if (cartError) {
+        console.error('Cart clear error:', cartError);
+        // Don't return error here, as the order is already updated
+      }
+    }
+
+    res.json({ received: true });
+  } catch (error) {
+    console.error('Webhook processing error:', error);
+    res.status(500).json({ error: 'Webhook processing failed' });
   }
 });
 
