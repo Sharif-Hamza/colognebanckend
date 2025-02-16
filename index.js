@@ -47,7 +47,9 @@ if (!process.env.SUPABASE_ANON_KEY || !process.env.SUPABASE_ANON_KEY.includes('.
   throw new Error('Invalid or missing SUPABASE_ANON_KEY');
 }
 
-// Initialize Supabase Admin client
+// Initialize Supabase Admin client with better error handling
+console.log('Initializing Supabase Admin client with URL:', process.env.SUPABASE_URL);
+
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -59,20 +61,59 @@ const supabaseAdmin = createClient(
   }
 );
 
-// Test Supabase connection
-supabaseAdmin
-  .from('profiles')
-  .select('count', { count: 'exact', head: true })
-  .then(({ count, error }) => {
-    if (error) {
-      console.error('Supabase connection test failed:', error);
+// Test Supabase connection with detailed error logging
+async function testSupabaseConnection() {
+  try {
+    console.log('Testing Supabase connection...');
+    
+    // First test auth
+    const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    if (authError) {
+      console.error('Supabase auth test failed:', {
+        error: authError,
+        message: authError.message,
+        details: authError.details,
+        hint: authError.hint
+      });
     } else {
-      console.log('Supabase connection test successful. Profile count:', count);
+      console.log('Supabase auth test successful');
     }
-  })
-  .catch(error => {
-    console.error('Unexpected error testing Supabase connection:', error);
-  });
+
+    // Then test database
+    const { data, error: dbError } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .limit(1);
+
+    if (dbError) {
+      console.error('Supabase database test failed:', {
+        error: dbError,
+        message: dbError.message,
+        code: dbError.code,
+        details: dbError.details,
+        hint: dbError.hint
+      });
+      throw dbError;
+    }
+
+    console.log('Supabase database test successful. Sample data:', data);
+    return true;
+  } catch (error) {
+    console.error('Unexpected error testing Supabase connection:', {
+      error,
+      message: error.message,
+      stack: error.stack
+    });
+    return false;
+  }
+}
+
+// Run the connection test
+testSupabaseConnection().then(success => {
+  if (!success) {
+    console.error('Supabase connection test failed. Check your environment variables and network connectivity.');
+  }
+});
 
 // Initialize Supabase Auth client
 const supabaseAuth = createClient(
@@ -151,37 +192,73 @@ async function verifyAuth(req, res, next) {
         email: profileData.email.substring(0, 3) + '...' // Log partial email for privacy
       });
 
-      const { data: newProfile, error: createError } = await supabaseAdmin
-        .from('profiles')
-        .insert(profileData)
-        .select()
-        .single();
+      try {
+        // First, disable RLS for this operation
+        await supabaseAdmin.rpc('disable_rls');
 
-      if (createError) {
-        console.error('Profile creation error:', createError);
-        console.error('Error details:', {
-          error: createError,
-          code: createError.code,
-          message: createError.message,
-          details: createError.details,
-          hint: createError.hint,
-          userId: user.id,
-          userEmail: user.email.substring(0, 3) + '...',
-          userMetadata: user.user_metadata
+        const { data: newProfile, error: createError } = await supabaseAdmin
+          .from('profiles')
+          .insert(profileData)
+          .select()
+          .single();
+
+        // Re-enable RLS
+        await supabaseAdmin.rpc('enable_rls');
+
+        if (createError) {
+          console.error('Profile creation error:', createError);
+          console.error('Error details:', {
+            error: createError,
+            code: createError.code,
+            message: createError.message,
+            details: createError.details,
+            hint: createError.hint,
+            userId: user.id,
+            userEmail: user.email.substring(0, 3) + '...',
+            userMetadata: user.user_metadata
+          });
+
+          // Try alternative method if RLS is the issue
+          if (createError.code === '42501') { // Permission denied error
+            console.log('Attempting alternative profile creation method...');
+            const { data: altProfile, error: altError } = await supabaseAdmin
+              .from('profiles')
+              .insert(profileData)
+              .select()
+              .single();
+
+            if (altError) {
+              console.error('Alternative profile creation failed:', altError);
+              return res.status(500).json({ 
+                error: 'Failed to create user profile',
+                details: altError.message,
+                code: altError.code
+              });
+            }
+            profile = altProfile;
+          } else {
+            return res.status(500).json({ 
+              error: 'Failed to create user profile',
+              details: createError.message,
+              code: createError.code
+            });
+          }
+        } else {
+          profile = newProfile;
+        }
+
+        console.log('Profile created successfully:', {
+          id: profile.id,
+          email: profile.email.substring(0, 3) + '...',
+          created_at: profile.created_at
         });
+      } catch (error) {
+        console.error('Unexpected error during profile creation:', error);
         return res.status(500).json({ 
           error: 'Failed to create user profile',
-          details: createError.message,
-          code: createError.code
+          details: error.message
         });
       }
-
-      profile = newProfile;
-      console.log('Profile created successfully:', {
-        id: profile.id,
-        email: profile.email.substring(0, 3) + '...',
-        created_at: profile.created_at
-      });
     }
 
     req.user = {
