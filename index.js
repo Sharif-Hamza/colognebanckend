@@ -1,4 +1,4 @@
-// ES Module imports
+// ES Module imports// ES Module imports
 import { default as express } from 'express';
 import { default as cors } from 'cors';
 import { config } from 'dotenv';
@@ -148,14 +148,12 @@ const supabaseAuth = createClient(
 
 // CORS configuration
 app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'https://celebrated-hotteok-98d8df.netlify.app'
-  ],
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  origin: '*',  // Allow all origins in development
+  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
 // Parse JSON bodies (except for Stripe webhook)
