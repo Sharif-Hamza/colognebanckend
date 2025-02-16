@@ -362,19 +362,32 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
     });
 
     // Create order in Supabase
+    const orderData = {
+      user_id: req.user.id,
+      stripe_session_id: session.id,
+      status: 'pending',
+      total: session.amount_total / 100,
+      created_at: new Date().toISOString(),
+      line_items: JSON.stringify(line_items) // Convert to string to ensure proper JSON storage
+    };
+
+    console.log('Creating order with data:', {
+      ...orderData,
+      line_items: `${line_items.length} items` // Log count instead of full data
+    });
+
     const { error: orderError } = await supabaseAdmin
       .from('orders')
-      .insert({
-        user_id: req.user.id,
-        stripe_session_id: session.id,
-        status: 'pending',
-        total: session.amount_total / 100,
-        created_at: new Date().toISOString(),
-        line_items: line_items
-      });
+      .insert(orderData);
 
     if (orderError) {
-      console.error('Order creation error:', orderError);
+      console.error('Order creation error:', {
+        error: orderError,
+        code: orderError.code,
+        message: orderError.message,
+        details: orderError.details,
+        hint: orderError.hint
+      });
       return res.status(500).json({ 
         error: 'Failed to create order',
         details: orderError.message
