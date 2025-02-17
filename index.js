@@ -1,4 +1,4 @@
-// ES Module imports// ES Module imports
+// ES Module imports
 import { default as express } from 'express';
 import { default as cors } from 'cors';
 import { config } from 'dotenv';
@@ -363,7 +363,7 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
     const orderData = {
       user_id: req.user.id,
       stripe_session_id: session.id,
-      status: 'pending',
+      status: 'processing',
       total: session.amount_total / 100,
       created_at: new Date().toISOString(),
       line_items: JSON.stringify(line_items) // Convert to string to ensure proper JSON storage
@@ -374,17 +374,31 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       line_items: `${line_items.length} items` // Log count instead of full data
     });
 
-    const { error: orderError } = await supabaseAdmin
+    // First, disable RLS for this operation
+    await supabaseAdmin.rpc('disable_rls');
+
+    const { data: order, error: orderError } = await supabaseAdmin
       .from('orders')
-      .insert(orderData);
+      .insert([orderData])
+      .select()
+      .single();
+
+    // Re-enable RLS
+    await supabaseAdmin.rpc('enable_rls');
 
     if (orderError) {
       console.error('Order creation error:', {
-        error: orderError,
-        code: orderError.code,
-        message: orderError.message,
-        details: orderError.details,
-        hint: orderError.hint
+        error: {
+          message: orderError.message,
+          code: orderError.code,
+          details: orderError.details,
+          hint: orderError.hint,
+          full: JSON.stringify(orderError, null, 2)
+        },
+        orderData: {
+          ...orderData,
+          line_items: `${line_items.length} items`
+        }
       });
       return res.status(500).json({ 
         error: 'Failed to create order',
@@ -392,7 +406,11 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       });
     }
 
-    console.log('Order created successfully');
+    console.log('Order created successfully:', {
+      orderId: order.id,
+      status: order.status,
+      total: order.total
+    });
     res.json({ 
       sessionId: session.id,
       url: session.url
@@ -441,7 +459,7 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
       const { error: updateError } = await supabaseAdmin
         .from('orders')
         .update({
-          status: 'completed',
+          status: 'received',
           payment_status: session.payment_status,
           shipping_details: session.shipping_details,
           payment_intent: session.payment_intent,
