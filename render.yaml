@@ -7,6 +7,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CORS_ORIGIN
+        value: http://localhost:5175
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
@@ -16,6 +18,6 @@ services:
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
-        sync: false
+        value: whsec_QlLf8MYSHPBRQkCcrOLcN7A6FKW66puQ
     healthCheckPath: /
-    autoDeploy: true
+    autoDeploy: true 
