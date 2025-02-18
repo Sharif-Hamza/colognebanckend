@@ -325,7 +325,7 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       line_items,
       success_url,
       cancel_url,
-      customer: customer.id,
+      customer_email: req.user.email,
       metadata: {
         user_id: req.user.id
       },
