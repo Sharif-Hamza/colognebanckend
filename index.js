@@ -148,13 +148,19 @@ const supabaseAuth = createClient(
 
 // CORS configuration
 app.use(cors({
-  origin: '*',  // Allow all origins in development
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://cologne-ecommerce.netlify.app', 'http://localhost:5175']
+    : 'http://localhost:5175',
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
+  exposedHeaders: ['Access-Control-Allow-Origin'],
   credentials: true,
   preflightContinue: false,
   optionsSuccessStatus: 204
 }));
+
+// Add CORS headers middleware for preflight
+app.options('*', cors());
 
 // Parse JSON bodies (except for Stripe webhook)
 app.use((req, res, next) => {
