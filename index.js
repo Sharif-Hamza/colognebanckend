@@ -50,7 +50,14 @@ const corsOptions = {
       'http://localhost:5175',
       'https://celebrated-hotteok-98d8df.netlify.app'
     ];
-    callback(null, allowedOrigins.includes(origin) || !origin);
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (allowedOrigins.indexOf(origin) === -1) {
+      console.log('Origin not allowed:', origin);
+    }
+    return callback(null, allowedOrigins.includes(origin));
   },
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
@@ -74,7 +81,8 @@ app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`, {
     origin: req.headers.origin,
     contentType: req.headers['content-type'],
-    authorization: req.headers.authorization ? 'present' : 'missing'
+    authorization: req.headers.authorization ? 'present' : 'missing',
+    headers: req.headers
   });
   next();
 });
@@ -252,10 +260,15 @@ app.post('/.netlify/functions/stripe-webhook', async (req, res) => {
 
 // Start server
 const port = process.env.PORT || 3000;
-app.listen(port, async () => {
+app.listen(port, '0.0.0.0', async () => {
   try {
     await testSupabaseConnection();
     console.log(`Server running on port ${port} in ${process.env.NODE_ENV} mode`);
+    console.log('CORS configuration:', {
+      allowedOrigins: corsOptions.origin.toString(),
+      methods: corsOptions.methods,
+      allowedHeaders: corsOptions.allowedHeaders
+    });
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);
