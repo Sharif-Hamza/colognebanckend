@@ -146,21 +146,37 @@ const supabaseAuth = createClient(
   }
 );
 
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`, {
+    origin: req.headers.origin,
+    contentType: req.headers['content-type'],
+    authorization: req.headers.authorization ? 'present' : 'missing'
+  });
+  next();
+});
+
 // CORS configuration
-app.use(cors({
+const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
     ? ['https://cologne-ecommerce.netlify.app', 'http://localhost:5175']
     : 'http://localhost:5175',
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
-  exposedHeaders: ['Access-Control-Allow-Origin'],
-  credentials: true,
-  preflightContinue: false,
-  optionsSuccessStatus: 204
-}));
+  credentials: true
+};
 
-// Add CORS headers middleware for preflight
-app.options('*', cors());
+// Enable CORS for all routes
+app.use(cors(corsOptions));
+
+// Handle preflight requests
+app.options('*', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'http://localhost:5175');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, stripe-signature');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.status(204).end();
+});
 
 // Parse JSON bodies (except for Stripe webhook)
 app.use((req, res, next) => {
