@@ -48,12 +48,12 @@ const corsOptions = {
   origin: function(origin, callback) {
     const allowedOrigins = [
       'http://localhost:5175',
-      'https://cologne-ecommerce.netlify.app'
+      'https://celebrated-hotteok-98d8df.netlify.app'
     ];
     callback(null, allowedOrigins.includes(origin) || !origin);
   },
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
   credentials: true,
   optionsSuccessStatus: 200
 };
