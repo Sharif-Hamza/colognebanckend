@@ -158,7 +158,7 @@ app.use(cors({
 
 // Parse JSON bodies (except for Stripe webhook)
 app.use((req, res, next) => {
-  if (req.path === '/api/webhook') {
+  if (req.path === '/.netlify/functions/stripe-webhook') {
     next();
   } else {
     express.json()(req, res, next);
@@ -374,7 +374,7 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
 });
 
 // Webhook endpoint
-app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+app.post('/.netlify/functions/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
 
