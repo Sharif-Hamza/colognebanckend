@@ -8,7 +8,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: CORS_ORIGIN
-        value: "http://localhost:5175,https://cologne-ecommerce.netlify.app"
+        value: "https://celebrated-hotteok-98d8df.netlify.app"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
@@ -20,4 +20,4 @@ services:
       - key: STRIPE_WEBHOOK_SECRET
         value: whsec_QlLf8MYSHPBRQkCcrOLcN7A6FKW66puQ
     healthCheckPath: /
-    autoDeploy: true 
+    autoDeploy: true
