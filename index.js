@@ -325,7 +325,7 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       line_items,
       success_url,
       cancel_url,
-      customer_email: req.user.email,
+      customer: customer.id,
       metadata: {
         user_id: req.user.id
       },
@@ -353,64 +353,7 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       }
     });
 
-    console.log('Stripe session created:', {
-      sessionId: session.id,
-      amount: session.amount_total,
-      url: session.url
-    });
-
-    // Create order in Supabase
-    const orderData = {
-      user_id: req.user.id,
-      stripe_session_id: session.id,
-      status: 'processing',
-      total: session.amount_total / 100,
-      created_at: new Date().toISOString(),
-      line_items: JSON.stringify(line_items) // Convert to string to ensure proper JSON storage
-    };
-
-    console.log('Creating order with data:', {
-      ...orderData,
-      line_items: `${line_items.length} items` // Log count instead of full data
-    });
-
-    // First, disable RLS for this operation
-    await supabaseAdmin.rpc('disable_rls');
-
-    const { data: order, error: orderError } = await supabaseAdmin
-      .from('orders')
-      .insert([orderData])
-      .select()
-      .single();
-
-    // Re-enable RLS
-    await supabaseAdmin.rpc('enable_rls');
-
-    if (orderError) {
-      console.error('Order creation error:', {
-        error: {
-          message: orderError.message,
-          code: orderError.code,
-          details: orderError.details,
-          hint: orderError.hint,
-          full: JSON.stringify(orderError, null, 2)
-        },
-        orderData: {
-          ...orderData,
-          line_items: `${line_items.length} items`
-        }
-      });
-      return res.status(500).json({ 
-        error: 'Failed to create order',
-        details: orderError.message
-      });
-    }
-
-    console.log('Order created successfully:', {
-      orderId: order.id,
-      status: order.status,
-      total: order.total
-    });
+    // Order will be created by the Stripe webhook after successful payment
     res.json({ 
       sessionId: session.id,
       url: session.url
