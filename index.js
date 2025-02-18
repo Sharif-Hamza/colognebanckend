@@ -1,8 +1,8 @@
 // ES Module imports
-import express from 'express';
-import cors from 'cors';
+import { default as express } from 'express';
+import { default as cors } from 'cors';
 import { config } from 'dotenv';
-import Stripe from 'stripe';
+import { default as Stripe } from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 
 // Load environment variables
@@ -23,9 +23,40 @@ console.log('Environment variables check:', {
   NODE_ENV: process.env.NODE_ENV
 });
 
-// Initialize Supabase client
+// Initialize Express app
+const app = express();
+
+// Initialize Stripe with error handling
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error('STRIPE_SECRET_KEY is not set');
+}
+
+if (!process.env.STRIPE_WEBHOOK_SECRET) {
+  throw new Error('STRIPE_WEBHOOK_SECRET is not set');
+}
+
+// Initialize Stripe
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2023-10-16'
+});
+
+// Validate Supabase configuration
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_URL.includes('supabase.co')) {
+  throw new Error('Invalid or missing SUPABASE_URL');
+}
+
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.SUPABASE_SERVICE_ROLE_KEY.includes('.')) {
+  throw new Error('Invalid or missing SUPABASE_SERVICE_ROLE_KEY');
+}
+
+if (!process.env.SUPABASE_ANON_KEY || !process.env.SUPABASE_ANON_KEY.includes('.')) {
+  throw new Error('Invalid or missing SUPABASE_ANON_KEY');
+}
+
+// Initialize Supabase Admin client with better error handling
 console.log('Initializing Supabase Admin client with URL:', process.env.SUPABASE_URL);
-const supabase = createClient(
+
+const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   {
@@ -36,122 +67,212 @@ const supabase = createClient(
   }
 );
 
-// Initialize Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2023-10-16',
-});
-
-const app = express();
-
-// CORS configuration
-const corsOptions = {
-  origin: function(origin, callback) {
-    const allowedOrigins = [
-      'http://localhost:5175',
-      'https://celebrated-hotteok-98d8df.netlify.app'
-    ];
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) {
-      return callback(null, true);
-    }
-    if (allowedOrigins.indexOf(origin) === -1) {
-      console.log('Origin not allowed:', origin);
-    }
-    return callback(null, allowedOrigins.includes(origin));
-  },
-  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
-  credentials: true,
-  optionsSuccessStatus: 200
-};
-
-app.use(cors(corsOptions));
-
-// Middleware to parse JSON bodies
-app.use((req, res, next) => {
-  if (req.path === '/.netlify/functions/stripe-webhook') {
-    express.raw({ type: 'application/json' })(req, res, next);
-  } else {
-    express.json()(req, res, next);
-  }
-});
-
-// Middleware to log requests
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`, {
-    origin: req.headers.origin,
-    contentType: req.headers['content-type'],
-    authorization: req.headers.authorization ? 'present' : 'missing',
-    headers: req.headers
-  });
-  next();
-});
-
-// Test Supabase connection
+// Test Supabase connection with detailed error logging
 async function testSupabaseConnection() {
   try {
     console.log('Testing Supabase connection with URL:', process.env.SUPABASE_URL);
     console.log('Service Role Key length:', process.env.SUPABASE_SERVICE_ROLE_KEY?.length);
+    
+    // First test auth capabilities
+    const { data: { users }, error: listUsersError } = await supabaseAdmin.auth.admin.listUsers();
+    
+    if (listUsersError) {
+      console.error('Supabase auth admin test failed:', {
+        error: listUsersError,
+        message: listUsersError.message,
+        details: listUsersError.details,
+        hint: listUsersError.hint,
+        status: listUsersError.status
+      });
+    } else {
+      console.log('Supabase auth admin test successful:', {
+        usersCount: users?.length,
+        timestamp: new Date().toISOString()
+      });
+    }
 
-    // Test auth admin capabilities
-    const { data: { users }, error: authError } = await supabase.auth.admin.listUsers();
-    if (authError) throw authError;
-
-    console.log('Supabase auth admin test successful:', {
-      usersCount: users.length,
-      timestamp: new Date().toISOString()
-    });
-
-    // Test database query
-    const { data, error: dbError } = await supabase
-      .from('products')
-      .select('id')
+    // Then test database
+    const { data, error: dbError } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
       .limit(1);
 
-    if (dbError) throw dbError;
+    if (dbError) {
+      console.error('Supabase database test failed:', {
+        error: dbError,
+        message: dbError.message,
+        code: dbError.code,
+        details: dbError.details,
+        hint: dbError.hint
+      });
+      throw dbError;
+    }
 
     console.log('Supabase database test successful:', {
       dataPresent: !!data,
       recordCount: data?.length,
       timestamp: new Date().toISOString()
     });
-
-    console.log('Supabase connection test completed successfully');
+    return true;
   } catch (error) {
-    console.error('Supabase connection test failed:', error);
-    throw error;
+    console.error('Unexpected error testing Supabase connection:', {
+      error: error.message,
+      name: error.name,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
+    return false;
   }
 }
 
-// Verify auth token middleware
-async function verifyAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader) {
-    return res.status(401).json({ error: 'No authorization header' });
+// Run the connection test immediately
+testSupabaseConnection().then(success => {
+  if (!success) {
+    console.error('Supabase connection test failed - check credentials and network connectivity');
+  } else {
+    console.log('Supabase connection test completed successfully');
   }
+});
 
+// Initialize Supabase Auth client
+const supabaseAuth = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  }
+);
+
+// CORS configuration
+const corsOptions = {
+  origin: function(origin, callback) {
+    const allowedOrigins = [
+      'http://localhost:5175',
+      'https://cologne-ecommerce.netlify.app',
+      'https://celebrated-hotteok-98d8df.netlify.app'
+    ];
+    
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log('Origin not allowed:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
+
+// Parse JSON bodies (except for Stripe webhook)
+app.use((req, res, next) => {
+  if (req.path === '/api/webhook') {
+    express.raw({ type: 'application/json' })(req, res, next);
+  } else {
+    express.json()(req, res, next);
+  }
+});
+
+// Verify auth middleware
+async function verifyAuth(req, res, next) {
   try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: 'No authorization header' });
+    }
+
     const token = authHeader.replace('Bearer ', '');
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
 
-    if (error) throw error;
-    if (!user) throw new Error('User not found');
+    // Verify token with Supabase Auth
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(token);
 
-    req.user = user;
+    if (authError || !user) {
+      console.error('Auth error:', authError);
+      return res.status(401).json({ 
+        error: 'Invalid authentication token',
+        details: authError?.message
+      });
+    }
+
+    // Get user profile
+    let { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    // If profile doesn't exist, create it
+    if (!profile) {
+      console.log('Creating profile for user:', user.id);
+      
+      const profileData = {
+        id: user.id,
+        email: user.email,
+        full_name: user.user_metadata?.full_name || '',
+        shipping_address: user.user_metadata?.shipping_address || null,
+        created_at: new Date().toISOString()
+      };
+
+      try {
+        // First, disable RLS for this operation
+        await supabaseAdmin.rpc('disable_rls');
+
+        const { data: newProfile, error: createError } = await supabaseAdmin
+          .from('profiles')
+          .insert(profileData)
+          .select()
+          .single();
+
+        // Re-enable RLS
+        await supabaseAdmin.rpc('enable_rls');
+
+        if (createError) {
+          console.error('Profile creation error:', createError);
+          return res.status(500).json({ 
+            error: 'Failed to create user profile',
+            details: createError.message
+          });
+        }
+        profile = newProfile;
+      } catch (error) {
+        console.error('Unexpected error during profile creation:', error);
+        return res.status(500).json({ 
+          error: 'Failed to create user profile',
+          details: error.message
+        });
+      }
+    }
+
+    req.user = {
+      id: user.id,
+      email: user.email,
+      profile
+    };
+
     next();
   } catch (error) {
     console.error('Auth error:', error);
-    return res.status(401).json({ error: 'Invalid token' });
+    res.status(401).json({ 
+      error: 'Authentication failed',
+      details: error.message
+    });
   }
 }
 
-// Health check endpoint
-app.get('/', (req, res) => {
-  res.json({ status: 'healthy', environment: process.env.NODE_ENV });
-});
-
-// Create Stripe checkout session
+// Create checkout session endpoint
 app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
   try {
     const { line_items, success_url, cancel_url } = req.body;
@@ -160,91 +281,158 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       return res.status(400).json({ error: 'No items in cart' });
     }
 
+    console.log('Creating checkout session for user:', {
+      userId: req.user.id,
+      itemCount: line_items.length
+    });
+
+    // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
       mode: 'payment',
       line_items,
       success_url,
       cancel_url,
+      customer_email: req.user.email,
       metadata: {
         user_id: req.user.id
+      },
+      shipping_address_collection: {
+        allowed_countries: ['US', 'CA', 'GB'],
+      },
+      shipping_options: [
+        {
+          shipping_rate_data: {
+            type: 'fixed_amount',
+            fixed_amount: { amount: 0, currency: 'usd' },
+            display_name: 'Free shipping',
+            delivery_estimate: {
+              minimum: { unit: 'business_day', value: 5 },
+              maximum: { unit: 'business_day', value: 7 },
+            },
+          },
+        }
+      ],
+      allow_promotion_codes: true,
+      billing_address_collection: 'required',
+      submit_type: 'pay',
+      payment_intent_data: {
+        capture_method: 'automatic',
       }
     });
 
-    res.json({ url: session.url, sessionId: session.id });
+    console.log('Stripe session created:', {
+      sessionId: session.id,
+      amount: session.amount_total,
+      url: session.url
+    });
+
+    res.json({ 
+      sessionId: session.id,
+      url: session.url
+    });
   } catch (error) {
-    console.error('Checkout error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Checkout error:', {
+      message: error.message,
+      type: error.type,
+      code: error.code,
+      param: error.param,
+      detail: error.detail
+    });
+    res.status(500).json({ 
+      error: 'Checkout failed',
+      details: error.message
+    });
   }
 });
 
-// Stripe webhook endpoint
-app.post('/.netlify/functions/stripe-webhook', async (req, res) => {
-  try {
-    const sig = req.headers['stripe-signature'];
-    if (!sig) throw new Error('No Stripe signature found');
+// Webhook endpoint
+app.post('/api/webhook', async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
 
-    const event = stripe.webhooks.constructEvent(
+  try {
+    event = stripe.webhooks.constructEvent(
       req.body,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
 
+  try {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
-      const userId = session.metadata?.user_id;
+      
+      console.log('Processing completed checkout session:', {
+        sessionId: session.id,
+        userId: session.metadata.user_id
+      });
 
-      if (!userId) {
-        throw new Error('No user ID in session metadata');
-      }
-
-      // Create order record
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .insert({
-          user_id: userId,
-          status: 'processing',
-          total: session.amount_total / 100,
-          subtotal: session.amount_subtotal / 100,
-          tax_amount: session.total_details?.amount_tax ? session.total_details.amount_tax / 100 : 0,
-          shipping_cost: session.total_details?.amount_shipping ? session.total_details.amount_shipping / 100 : 0,
-          stripe_session_id: session.id
-        })
-        .select()
-        .single();
-
-      if (orderError) throw orderError;
-
-      // Get line items
+      // Get line items from Stripe
       const lineItems = await stripe.checkout.sessions.listLineItems(session.id, {
         expand: ['data.price.product']
       });
 
-      // Create order items
-      const orderItems = lineItems.data.map(item => {
-        const product = item.price?.product;
-        return {
-          order_id: order.id,
-          product_id: product.metadata.product_id,
-          quantity: item.quantity,
-          price_at_time: item.price.unit_amount / 100
-        };
-      });
+      // Create order in Supabase
+      const orderData = {
+        user_id: session.metadata.user_id,
+        stripe_session_id: session.id,
+        status: 'processing',
+        total: session.amount_total / 100,
+        subtotal: session.amount_subtotal / 100,
+        tax_amount: session.total_details?.amount_tax ? session.total_details.amount_tax / 100 : 0,
+        shipping_cost: session.total_details?.amount_shipping ? session.total_details.amount_shipping / 100 : 0,
+        shipping_details: session.shipping_details,
+        payment_status: session.payment_status,
+        payment_intent: session.payment_intent,
+        created_at: new Date().toISOString()
+      };
 
-      const { error: itemsError } = await supabase
+      // Disable RLS for order creation
+      await supabaseAdmin.rpc('disable_rls');
+
+      const { data: order, error: orderError } = await supabaseAdmin
+        .from('orders')
+        .insert([orderData])
+        .select()
+        .single();
+
+      if (orderError) {
+        console.error('Order creation error:', orderError);
+        return res.status(500).json({ error: 'Failed to create order' });
+      }
+
+      // Create order items
+      const orderItems = lineItems.data.map(item => ({
+        order_id: order.id,
+        product_id: item.price?.product.metadata.product_id,
+        quantity: item.quantity,
+        price_at_time: item.price?.unit_amount / 100
+      }));
+
+      const { error: itemsError } = await supabaseAdmin
         .from('order_items')
         .insert(orderItems);
 
-      if (itemsError) throw itemsError;
+      if (itemsError) {
+        console.error('Order items creation error:', itemsError);
+      }
+
+      // Re-enable RLS
+      await supabaseAdmin.rpc('enable_rls');
 
       // Clear cart
-      const { data: cart } = await supabase
+      const { data: cart } = await supabaseAdmin
         .from('carts')
         .select('id')
-        .eq('user_id', userId)
+        .eq('user_id', session.metadata.user_id)
         .single();
 
       if (cart) {
-        await supabase
+        await supabaseAdmin
           .from('cart_items')
           .delete()
           .eq('cart_id', cart.id);
@@ -253,24 +441,27 @@ app.post('/.netlify/functions/stripe-webhook', async (req, res) => {
 
     res.json({ received: true });
   } catch (error) {
-    console.error('Webhook error:', error);
-    return res.status(400).json({ error: error.message });
+    console.error('Webhook processing error:', error);
+    res.status(500).json({ error: 'Webhook processing failed' });
   }
 });
 
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV
+  });
+});
+
 // Start server
-const port = process.env.PORT || 3000;
-app.listen(port, '0.0.0.0', async () => {
-  try {
-    await testSupabaseConnection();
-    console.log(`Server running on port ${port} in ${process.env.NODE_ENV} mode`);
-    console.log('CORS configuration:', {
-      allowedOrigins: corsOptions.origin.toString(),
-      methods: corsOptions.methods,
-      allowedHeaders: corsOptions.allowedHeaders
-    });
-  } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
-  }
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', async () => {
+  console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+  console.log('CORS configuration:', {
+    allowedOrigins: corsOptions.origin.toString(),
+    methods: corsOptions.methods,
+    allowedHeaders: corsOptions.allowedHeaders
+  });
 });
