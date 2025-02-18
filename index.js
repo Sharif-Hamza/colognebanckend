@@ -1,4 +1,5 @@
 // ES Module imports
+import { default as express } from 'express';// ES Module imports
 import { default as express } from 'express';
 import { default as cors } from 'cors';
 import { config } from 'dotenv';
@@ -161,24 +162,12 @@ const corsOptions = {
   origin: process.env.CORS_ORIGIN || 'http://localhost:5175',
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
-  credentials: true
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 };
 
 // Enable CORS for all routes
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || 'http://localhost:5175');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, stripe-signature');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  
-  // Handle preflight
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-  
-  next();
-});
-
 app.use(cors(corsOptions));
 
 // Parse JSON bodies (except for Stripe webhook)
