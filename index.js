@@ -43,25 +43,22 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 
 const app = express();
 
-// CORS configuration - permissive for debugging
-app.use(cors({
-  origin: true, // Allow all origins
+// CORS configuration
+const corsOptions = {
+  origin: function(origin, callback) {
+    const allowedOrigins = [
+      'http://localhost:5175',
+      'https://cologne-ecommerce.netlify.app'
+    ];
+    callback(null, allowedOrigins.includes(origin) || !origin);
+  },
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['*'], // Allow all headers
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   optionsSuccessStatus: 200
-}));
+};
 
-// Handle preflight requests
-app.options('*', cors());
-
-// Add CORS headers to all responses
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
-  res.header('Access-Control-Allow-Headers', '*');
-  next();
-});
+app.use(cors(corsOptions));
 
 // Middleware to parse JSON bodies
 app.use((req, res, next) => {
