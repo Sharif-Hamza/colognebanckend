@@ -1,4 +1,4 @@
-// ES Module imports
+/ ES Module imports
 import express from 'express';
 import cors from 'cors';
 import { config } from 'dotenv';
@@ -43,42 +43,31 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 
 const app = express();
 
-// CORS configuration
-const corsOptions = {
-  origin: function(origin, callback) {
-    const allowedOrigins = [
-      'http://localhost:5175',
-      'https://cologne-ecommerce.netlify.app'
-    ];
-    
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) {
-      return callback(null, true);
-    }
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      console.log('Blocked by CORS:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+// CORS configuration - permissive for debugging
+app.use(cors({
+  origin: true, // Allow all origins
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
+  allowedHeaders: ['*'], // Allow all headers
   credentials: true,
-  preflightContinue: false,
-  optionsSuccessStatus: 204
-};
+  optionsSuccessStatus: 200
+}));
 
-app.use(cors(corsOptions));
+// Handle preflight requests
+app.options('*', cors());
+
+// Add CORS headers to all responses
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+  res.header('Access-Control-Allow-Headers', '*');
+  next();
+});
 
 // Middleware to parse JSON bodies
 app.use((req, res, next) => {
   if (req.path === '/.netlify/functions/stripe-webhook') {
-    // Use raw body for Stripe webhook
     express.raw({ type: 'application/json' })(req, res, next);
   } else {
-    // Use JSON parser for all other routes
     express.json()(req, res, next);
   }
 });
