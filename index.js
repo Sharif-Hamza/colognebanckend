@@ -148,7 +148,7 @@ const supabaseAuth = createClient(
 
 // CORS configuration
 const corsOptions = {
-  origin: true, // Allow all origins
+  origin: ['http://localhost:5175', 'https://celebrated-hotteok-98d8df.netlify.app'],
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
   exposedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
