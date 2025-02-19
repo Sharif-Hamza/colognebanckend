@@ -155,12 +155,7 @@ const corsOptions = {
       'https://celebrated-hotteok-98d8df.netlify.app'
     ];
     
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.log('Origin not allowed:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
+    callback(null, true);
   },
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
@@ -175,7 +170,7 @@ app.use(cors(corsOptions));
 
 // Handle preflight requests explicitly
 app.options('*', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, stripe-signature');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
