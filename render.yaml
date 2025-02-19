@@ -20,6 +20,6 @@ services:
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
-        value: whsec_QlLf8MYSHPBRQkCcrOLcN7A6FKW66puQ
+        value: whsec_yVyqtxJvSi0xl0zCxwwEo3k70KsW5NL0
     healthCheckPath: /
-    autoDeploy: true
+    autoDeploy: true 
