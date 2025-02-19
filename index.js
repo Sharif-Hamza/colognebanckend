@@ -147,25 +147,15 @@ const supabaseAuth = createClient(
 );
 
 // CORS configuration
-app.use((req, res, next) => {
-  const allowedOrigins = ['http://localhost:5175', 'https://celebrated-hotteok-98d8df.netlify.app'];
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, stripe-signature');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Max-Age', '86400');
+const corsOptions = {
+  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:5175', 'https://celebrated-hotteok-98d8df.netlify.app'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+};
 
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-
-  next();
-});
+// Apply CORS middleware
+app.use(cors(corsOptions));
 
 // Parse JSON bodies (except for Stripe webhook)
 app.use((req, res, next) => {
@@ -453,7 +443,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
   console.log('CORS configuration:', {
-    allowedOrigins: corsOptions.origin.toString(),
+    allowedOrigins: corsOptions.origin,
     methods: corsOptions.methods,
     allowedHeaders: corsOptions.allowedHeaders
   });
