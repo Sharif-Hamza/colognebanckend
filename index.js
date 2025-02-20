@@ -160,7 +160,7 @@ const corsOptions = {
       callback(null, true);
     } else {
       console.log('Origin not allowed by CORS:', origin);
-      callback(null, false);
+      callback(new Error('Not allowed by CORS'));
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -175,28 +175,8 @@ const corsOptions = {
 // Apply CORS middleware
 app.use(cors(corsOptions));
 
-// Additional CORS headers middleware
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  const allowedOrigins = process.env.CORS_ORIGIN ? 
-    process.env.CORS_ORIGIN.split(',') : 
-    ['http://localhost:5175', 'https://celebrated-hotteok-98d8df.netlify.app'];
-
-  if (origin && allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, stripe-signature');
-    res.setHeader('Access-Control-Max-Age', '86400');
-  }
-
-  // Handle preflight
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-
-  next();
-});
+// Remove the additional CORS headers middleware since it's redundant
+app.use(express.json());
 
 // Parse JSON bodies (except for Stripe webhook)
 app.use((req, res, next) => {
