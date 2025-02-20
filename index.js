@@ -160,7 +160,7 @@ const corsOptions = {
       callback(null, true);
     } else {
       console.log('Origin not allowed by CORS:', origin);
-      callback(new Error('Not allowed by CORS'));
+      callback(null, false);
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
