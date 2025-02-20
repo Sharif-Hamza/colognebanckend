@@ -283,6 +283,7 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
 
     console.log('Creating checkout session for user:', {
       userId: req.user.id,
+      email: req.user.email.substring(0, 3) + '...',
       itemCount: line_items.length
     });
 
@@ -295,7 +296,8 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       cancel_url,
       customer_email: req.user.email,
       metadata: {
-        user_id: req.user.id
+        user_id: req.user.id,
+        line_items: JSON.stringify(line_items) // Store line items in metadata for webhook
       },
       shipping_address_collection: {
         allowed_countries: ['US', 'CA', 'GB'],
@@ -347,7 +349,7 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
 });
 
 // Webhook endpoint
-app.post('/api/webhook', async (req, res) => {
+app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
 
@@ -371,11 +373,6 @@ app.post('/api/webhook', async (req, res) => {
         userId: session.metadata.user_id
       });
 
-      // Get line items from Stripe
-      const lineItems = await stripe.checkout.sessions.listLineItems(session.id, {
-        expand: ['data.price.product']
-      });
-
       // Create order in Supabase
       const orderData = {
         user_id: session.metadata.user_id,
@@ -388,6 +385,7 @@ app.post('/api/webhook', async (req, res) => {
         shipping_details: session.shipping_details,
         payment_status: session.payment_status,
         payment_intent: session.payment_intent,
+        line_items: session.metadata.line_items, // Stored from checkout session
         created_at: new Date().toISOString()
       };
 
@@ -405,38 +403,24 @@ app.post('/api/webhook', async (req, res) => {
         return res.status(500).json({ error: 'Failed to create order' });
       }
 
-      // Create order items
-      const orderItems = lineItems.data.map(item => ({
-        order_id: order.id,
-        product_id: item.price?.product.metadata.product_id,
-        quantity: item.quantity,
-        price_at_time: item.price?.unit_amount / 100
-      }));
-
-      const { error: itemsError } = await supabaseAdmin
-        .from('order_items')
-        .insert(orderItems);
-
-      if (itemsError) {
-        console.error('Order items creation error:', itemsError);
-      }
+      // Clear user's cart
+      const { error: cartError } = await supabaseAdmin
+        .from('cart_items')
+        .delete()
+        .eq('user_id', session.metadata.user_id);
 
       // Re-enable RLS
       await supabaseAdmin.rpc('enable_rls');
 
-      // Clear cart
-      const { data: cart } = await supabaseAdmin
-        .from('carts')
-        .select('id')
-        .eq('user_id', session.metadata.user_id)
-        .single();
-
-      if (cart) {
-        await supabaseAdmin
-          .from('cart_items')
-          .delete()
-          .eq('cart_id', cart.id);
+      if (cartError) {
+        console.error('Error clearing cart:', cartError);
       }
+
+      console.log('Order created successfully:', {
+        orderId: order.id,
+        status: order.status,
+        total: order.total
+      });
     }
 
     res.json({ received: true });
