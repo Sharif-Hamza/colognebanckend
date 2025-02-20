@@ -148,7 +148,21 @@ const supabaseAuth = createClient(
 
 // CORS configuration
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:5175', 'https://celebrated-hotteok-98d8df.netlify.app'],
+  origin: function(origin, callback) {
+    const allowedOrigins = process.env.CORS_ORIGIN ? 
+      process.env.CORS_ORIGIN.split(',') : 
+      ['http://localhost:5175', 'https://celebrated-hotteok-98d8df.netlify.app'];
+    
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('Origin not allowed by CORS:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
   exposedHeaders: ['Access-Control-Allow-Origin'],
@@ -161,16 +175,26 @@ const corsOptions = {
 // Apply CORS middleware
 app.use(cors(corsOptions));
 
-// Additional CORS headers for preflight
+// Additional CORS headers middleware
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (corsOptions.origin.includes(origin)) {
+  const allowedOrigins = process.env.CORS_ORIGIN ? 
+    process.env.CORS_ORIGIN.split(',') : 
+    ['http://localhost:5175', 'https://celebrated-hotteok-98d8df.netlify.app'];
+
+  if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods', corsOptions.methods.join(', '));
-    res.setHeader('Access-Control-Allow-Headers', corsOptions.allowedHeaders.join(', '));
-    res.setHeader('Access-Control-Max-Age', corsOptions.maxAge);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, stripe-signature');
+    res.setHeader('Access-Control-Max-Age', '86400');
   }
+
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
   next();
 });
 
@@ -281,10 +305,24 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       return res.status(400).json({ error: 'No items in cart' });
     }
 
+    // Validate line items
+    for (const item of line_items) {
+      if (!item.price_data?.product_data?.metadata?.product_id) {
+        return res.status(400).json({ 
+          error: 'Invalid line item',
+          details: 'Each line item must include product_id in metadata'
+        });
+      }
+    }
+
     console.log('Creating checkout session for user:', {
       userId: req.user.id,
       email: req.user.email.substring(0, 3) + '...',
-      itemCount: line_items.length
+      itemCount: line_items.length,
+      items: line_items.map(item => ({
+        product_id: item.price_data.product_data.metadata.product_id,
+        quantity: item.quantity
+      }))
     });
 
     // Create Stripe checkout session
@@ -292,12 +330,12 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       payment_method_types: ['card'],
       mode: 'payment',
       line_items,
-      success_url,
-      cancel_url,
+      success_url: success_url || `${req.headers.origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: cancel_url || `${req.headers.origin}/cart`,
       customer_email: req.user.email,
       metadata: {
         user_id: req.user.id,
-        line_items: JSON.stringify(line_items) // Store line items in metadata for webhook
+        line_items: JSON.stringify(line_items)
       },
       shipping_address_collection: {
         allowed_countries: ['US', 'CA', 'GB'],
@@ -320,13 +358,17 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
       submit_type: 'pay',
       payment_intent_data: {
         capture_method: 'automatic',
+        metadata: {
+          user_id: req.user.id
+        }
       }
     });
 
     console.log('Stripe session created:', {
       sessionId: session.id,
       amount: session.amount_total,
-      url: session.url
+      url: session.url,
+      metadata: session.metadata
     });
 
     res.json({ 
@@ -370,8 +412,25 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
       
       console.log('Processing completed checkout session:', {
         sessionId: session.id,
-        userId: session.metadata.user_id
+        userId: session.metadata.user_id,
+        amount: session.amount_total,
+        paymentStatus: session.payment_status
       });
+
+      // Verify payment status
+      if (session.payment_status !== 'paid') {
+        console.log('Payment not completed, skipping order creation');
+        return res.json({ received: true });
+      }
+
+      // Get line items from session metadata and parse
+      let lineItems;
+      try {
+        lineItems = JSON.parse(session.metadata.line_items);
+      } catch (error) {
+        console.error('Error parsing line items:', error);
+        return res.status(400).json({ error: 'Invalid line items data' });
+      }
 
       // Create order in Supabase
       const orderData = {
@@ -385,13 +444,13 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
         shipping_details: session.shipping_details,
         payment_status: session.payment_status,
         payment_intent: session.payment_intent,
-        line_items: session.metadata.line_items, // Stored from checkout session
         created_at: new Date().toISOString()
       };
 
-      // Disable RLS for order creation
+      // Disable RLS for database operations
       await supabaseAdmin.rpc('disable_rls');
 
+      // Create the order
       const { data: order, error: orderError } = await supabaseAdmin
         .from('orders')
         .insert([orderData])
@@ -401,6 +460,22 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
       if (orderError) {
         console.error('Order creation error:', orderError);
         return res.status(500).json({ error: 'Failed to create order' });
+      }
+
+      // Create order items
+      const orderItems = lineItems.map(item => ({
+        order_id: order.id,
+        product_id: item.price_data.product_data.metadata.product_id,
+        quantity: item.quantity,
+        price_at_time: item.price_data.unit_amount / 100
+      }));
+
+      const { error: itemsError } = await supabaseAdmin
+        .from('order_items')
+        .insert(orderItems);
+
+      if (itemsError) {
+        console.error('Error creating order items:', itemsError);
       }
 
       // Clear user's cart
@@ -416,10 +491,26 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
         console.error('Error clearing cart:', cartError);
       }
 
+      // Create order history entry
+      const { error: historyError } = await supabaseAdmin
+        .from('order_history')
+        .insert({
+          order_id: order.id,
+          status: 'processing',
+          notes: 'Order created via successful Stripe payment',
+          created_by: session.metadata.user_id,
+          created_at: new Date().toISOString()
+        });
+
+      if (historyError) {
+        console.error('Error creating order history:', historyError);
+      }
+
       console.log('Order created successfully:', {
         orderId: order.id,
         status: order.status,
-        total: order.total
+        total: order.total,
+        itemCount: orderItems.length
       });
     }
 
