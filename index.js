@@ -370,6 +370,119 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
   }
 });
 
+// Add verify-session endpoint before the webhook endpoint
+app.post('/api/verify-session', async (req, res) => {
+  try {
+    console.log('Verifying session:', req.body);
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Session ID is required' });
+    }
+
+    // Retrieve the session from Stripe with line items
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ['line_items.data.price.product']
+    });
+
+    console.log('Retrieved Stripe session:', session);
+
+    if (!session || session.payment_status !== 'paid') {
+      return res.status(400).json({ error: 'Invalid or unpaid session' });
+    }
+
+    // Check if order already exists
+    const { data: existingOrder } = await supabaseAdmin
+      .from('orders')
+      .select('id')
+      .eq('stripe_session_id', sessionId)
+      .single();
+
+    if (existingOrder) {
+      return res.json({ order: existingOrder });
+    }
+
+    // Create new order
+    const { data: order, error: orderError } = await supabaseAdmin
+      .from('orders')
+      .insert({
+        user_id: session.metadata.user_id,
+        status: 'processing',
+        total: session.amount_total / 100,
+        subtotal: session.amount_subtotal / 100,
+        tax_amount: session.total_details?.amount_tax ? session.total_details.amount_tax / 100 : 0,
+        shipping_cost: session.total_details?.amount_shipping ? session.total_details.amount_shipping / 100 : 0,
+        stripe_session_id: session.id,
+        shipping_method: 'Standard Shipping',
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (orderError) {
+      console.error('Error creating order:', orderError);
+      throw orderError;
+    }
+
+    console.log('Created order:', order);
+
+    // Get line items from session
+    const lineItems = session.line_items.data;
+    const orderItems = lineItems.map(item => ({
+      order_id: order.id,
+      product_id: item.price.product.metadata.product_id,
+      quantity: item.quantity,
+      price: item.price.unit_amount / 100,
+      price_at_time: item.price.unit_amount / 100
+    }));
+
+    // Create order items
+    const { error: itemsError } = await supabaseAdmin
+      .from('order_items')
+      .insert(orderItems);
+
+    if (itemsError) {
+      console.error('Error creating order items:', itemsError);
+      throw itemsError;
+    }
+
+    // Create order history entry
+    const { error: historyError } = await supabaseAdmin
+      .from('order_history')
+      .insert({
+        order_id: order.id,
+        status: 'processing',
+        notes: 'Order created',
+        created_by: session.metadata.user_id,
+        created_at: new Date().toISOString()
+      });
+
+    if (historyError) {
+      console.error('Error creating order history:', historyError);
+      throw historyError;
+    }
+
+    // Clear user's cart
+    const { data: cartData } = await supabaseAdmin
+      .from('carts')
+      .select('id')
+      .eq('user_id', session.metadata.user_id)
+      .single();
+
+    if (cartData?.id) {
+      await supabaseAdmin
+        .from('cart_items')
+        .delete()
+        .eq('cart_id', cartData.id);
+    }
+
+    res.json({ order });
+  } catch (error) {
+    console.error('Error verifying session:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Webhook endpoint
 app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
@@ -511,12 +624,15 @@ app.get('/', (req, res) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+  console.log('Server endpoints:');
+  console.log(`- POST /api/create-checkout-session`);
+  console.log(`- POST /api/verify-session`);
+  console.log(`- POST /api/webhook`);
   console.log('CORS configuration:', {
-    allowedOrigins: corsOptions.origin,
-    methods: corsOptions.methods,
-    allowedHeaders: corsOptions.allowedHeaders
+    allowedOrigins: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:5175'],
+    methods: corsOptions.methods
   });
 });
