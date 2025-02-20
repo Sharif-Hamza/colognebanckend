@@ -277,7 +277,7 @@ async function verifyAuth(req, res, next) {
 }
 
 // Create checkout session endpoint
-app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
+app.post('/create-checkout-session', verifyAuth, async (req, res) => {
   try {
     const { line_items, success_url, cancel_url } = req.body;
 
@@ -371,7 +371,7 @@ app.post('/api/create-checkout-session', verifyAuth, async (req, res) => {
 });
 
 // Webhook endpoint
-app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
 
